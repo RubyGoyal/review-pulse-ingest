@@ -20,7 +20,9 @@ import gspread
 from google_play_scraper import Sort, reviews
 
 IST = timezone(timedelta(hours=5, minutes=30))
-RAW_CAP_PER_STAR = {1: 6000, 2: 3000, 3: 3000, 4: 6000, 5: 20000}
+# 5★ volume is ~3,300/day in India, and a Monday run must reach back ~8 days.
+RAW_CAP_PER_STAR = {1: 10000, 2: 5000, 3: 6000, 4: 12000, 5: 40000}
+PARTIAL = []  # star ratings that hit the cap before reaching the week start
 FEE_PATTERN = re.compile(
     r"refund|\bcharg(ed|ing|es)\b|deduct|debit|auto.?renew|renewal|subscri|billing|\bbill(ed)?\b|"
     r"payment|\bpaid\b|\bpay(ing)?\b|₹|\brs\.?\s?\d|\binr\b|rupee|\bgst\b|\btax\b|\bupi\b|auto.?pay|"
@@ -76,7 +78,10 @@ def pull_star(app_id, country, lang, star, start, cap):
         if batch[-1]["at"] < start:
             break
         time.sleep(0.3)
-    print(f"{star}★: {len(out)} raw, oldest {out[-1]['at'] if out else '-'}")
+    oldest = out[-1]["at"] if out else None
+    if oldest and oldest >= start and len(out) >= cap:
+        PARTIAL.append(f"{star}★ from {oldest:%Y-%m-%d %H:%M}")
+    print(f"{star}★: {len(out)} raw, oldest {oldest or '-'}")
     return out
 
 
@@ -138,7 +143,8 @@ def main():
         for star in range(1, 6):
             raw += pull_star(cfg["app_id"], cfg["country"], cfg["lang"], star, start, RAW_CAP_PER_STAR[star])
         base, boost, in_window = build_sample(raw, start, end, int(cfg["per_cell_cap"]), seed=week_id)
-        print(f"DRY RUN {week_id}: {in_window} reviews in window, base {len(base)}, boost {len(boost)}. Nothing written.")
+        print(f"DRY RUN {week_id}: {in_window} reviews in window, base {len(base)}, boost {len(boost)}. "
+              f"Partial coverage: {', '.join(PARTIAL) or 'none'}. Nothing written.")
         sys.exit(0 if len(base) >= int(cfg["min_reviews_per_week"]) else 1)
 
     existing_log = {r[0]: r for r in log_ws.get_all_values()[1:] if r}
@@ -165,9 +171,11 @@ def main():
                                value_input_option="RAW")
 
         status = "done" if len(base) >= min_reviews else "low_volume"
+        notes = [] if status == "done" else [f"base sample {len(base)} < {min_reviews}"]
+        if PARTIAL:
+            notes.append("partial coverage: " + ", ".join(PARTIAL))
         log.update(finished_at=now_iso(), status=status, reviews_fetched=in_window,
-                   reviews_new=len(rows),
-                   error="" if status == "done" else f"base sample {len(base)} < {min_reviews}")
+                   reviews_new=len(rows), error="; ".join(notes))
         upsert_log(log_ws, log)
         print(f"{week_id}: {in_window} in window, base {len(base)}, boost {len(boost)}, new rows {len(rows)} → {status}")
         if status != "done":
