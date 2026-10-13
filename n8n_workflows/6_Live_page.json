@@ -1,0 +1,148 @@
+{
+  "name": "Review Pulse – 6 Live page",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "review-pulse",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "600979e8-d66a-4361-ab5f-c592277841d9",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ],
+      "webhookId": "78460b5c-f619-4f05-b893-3e835d467582"
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "1EOhIUlNS4RBGThElb2kOHIdniqzQJScYD_EYkvqvcD0",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "runs",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "95314be6-7998-448a-9de1-e3d1a1567313",
+      "name": "Read runs",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        220,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---- Public read-only page: latest approved pulse + explainer + status of every week ----\nconst runs = $('Read runs').all(0, 0).map(i => i.json).filter(r => /^\\d{4}-W\\d{2}$/.test(String(r.run_id)));\nlet want = '';\ntry { want = String($('Webhook').first().json.query?.week || '').trim(); } catch (e) {}\nconst published = runs.filter(r => r.status === 'published').sort((a, b) => String(b.run_id).localeCompare(String(a.run_id)));\nconst run = published.find(r => r.run_id === want) || published[0];\n\nconst esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;');\nconst inline = s => esc(s).replace(/\\*\\*(.+?)\\*\\*/g, '<b>$1</b>').replace(/\\*(.+?)\\*/g, '<i>$1</i>')\n  .replace(/\\[(.+?)\\]\\((https?:\\/\\/[^)\\s]+)\\)/g, '<a href=\"$2\" target=\"_blank\" rel=\"noopener\">$1</a>');\nconst md = text => { const out = []; let list = null; const close = () => { if (list) { out.push(`</${list}>`); list = null; } };\n  for (const line of String(text || '').split('\\n')) { let m;\n    if ((m = line.match(/^(#{1,3})\\s+(.*)/))) { close(); out.push(`<h${m[1].length + 1}>${inline(m[2])}</h${m[1].length + 1}>`); }\n    else if ((m = line.match(/^\\d+\\.\\s+(.*)/))) { if (list !== 'ol') { close(); out.push('<ol>'); list = 'ol'; } out.push(`<li>${inline(m[1])}`); }\n    else if ((m = line.match(/^\\s+(\\*Metric:\\*.*)/))) { out.push(`<div class=\"metric\">${inline(m[1])}</div></li>`); }\n    else if ((m = line.match(/^-\\s+(.*)/))) { if (list !== 'ul') { close(); out.push('<ul>'); list = 'ul'; } out.push(`<li>${inline(m[1])}</li>`); }\n    else if (!line.trim()) close(); else { close(); out.push(`<p>${inline(line)}</p>`); } }\n  close(); return out.join('\\n'); };\nconst fmt = s => { const d = new Date(String(s).slice(0, 10) + 'T00:00:00Z'); return isNaN(d) ? esc(s) : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }); };\nconst THEME = { QUALITY: 'Answer quality', LIMITS: 'Usage limits', BUGS: 'App bugs', BILLING: 'Billing', PRAISE: 'Praise' };\nconst LABEL = { published: 'Published', awaiting_approval: 'Waiting for approval', approved: 'Approved, publishing', draft_ready: 'Draft ready',\n  analysed: 'Analysed', processing: 'Processing', tagging_in_progress: 'Tagging', blocked: 'Blocked', rejected: 'Rejected',\n  expired: 'Expired', publish_failed: 'Publish failed', draft_failed: 'Draft failed' };\n\nlet body;\nif (!run) body = '<p class=\"empty\">No approved pulse yet. The first one appears here after it is approved.</p>';\nelse {\n  let exp = {}, rep = {};\n  try { exp = JSON.parse(run.explainer_json || '{}'); } catch (e) {}\n  try { rep = JSON.parse(run.validation_report || '{}'); } catch (e) {}\n  const checks = rep.checks || {};\n  const badge = (ok, t) => `<span class=\"chip ${ok ? 'ok' : 'warn'}\">${ok ? '✓' : '!'} ${esc(t)}</span>`;\n  body = `\n<section class=\"card\">\n  <div class=\"meta\">${esc(run.run_id)} · week ${fmt(run.week_start)} – ${fmt(run.week_end)} · approved ${esc(String(run.approved_at || '').replace(/:\\d{2}$/, ''))} IST</div>\n  <div class=\"chips\">${badge(rep.passed, 'Validation passed')}${badge(Number(rep.pulse_words) <= 250, `${rep.pulse_words} words (≤250)`)}${badge(checks.quotes_verbatim, 'Quotes verbatim')}${badge(checks.numbers_from_stats, 'Numbers from computed stats')}${badge(true, 'Human-approved')}</div>\n  <div class=\"pulse\">${md(run.weekly_pulse)}</div>\n</section>\n<section class=\"card\">\n  <h2>Support snippet: \"I paid ₹399 but the app still shows Free\"</h2>\n  <p class=\"sub\">Fee issue <b>${esc(run.fee_code)}</b> · ${esc(run.fee_count)} reviews in 10 weeks · ${esc(String(run.fee_trend || '').split(',').pop().trim())}</p>\n  ${md(exp.markdown)}\n</section>`;\n}\nconst rows = runs.sort((a, b) => String(b.run_id).localeCompare(String(a.run_id))).map(r => `<tr>\n  <td>${r.status === 'published' ? `<a href=\"?week=${esc(r.run_id)}\">${esc(r.run_id)}</a>` : esc(r.run_id)}</td><td>${fmt(r.week_start)} – ${fmt(r.week_end)}</td>\n  <td><span class=\"st st-${esc(r.status)}\">${esc(LABEL[r.status] || r.status)}</span></td><td>${esc(String(r.top_themes || '').split(',').filter(Boolean).map(t => THEME[t] || t).join(', ') || '–')}</td>\n  <td>${r.fee_count ? esc(r.fee_count) + ' · ' + esc(String(r.fee_trend || '').split(',').pop().trim()) : '–'}</td></tr>`).join('');\n\nconst html = `<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n<title>Review Pulse · ChatGPT Android (India)</title><style>\n:root{--bg:#f6f5f2;--card:#fff;--ink:#1d1d1b;--mute:#6b6a66;--line:#e4e2dc;--acc:#0f6e5c;--warn:#a15c00}\n@media (prefers-color-scheme:dark){:root{--bg:#161615;--card:#20201e;--ink:#ecebe7;--mute:#a3a29c;--line:#34332f;--acc:#5cc4ae;--warn:#e0a24a}}\n*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}\n.wrap{max-width:860px;margin:0 auto;padding:28px 16px 48px}header h1{font-size:26px;margin:0 0 4px}header p{margin:0;color:var(--mute)}\n.flow{display:flex;flex-wrap:wrap;gap:6px;margin:18px 0 22px;font-size:13px}.flow span{background:var(--card);border:1px solid var(--line);border-radius:999px;padding:4px 10px}\n.flow .gate{border-color:var(--acc);color:var(--acc);font-weight:600}\n.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 22px;margin-bottom:18px}\n.meta,.sub{color:var(--mute);font-size:13px}.chips{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 4px}\n.chip{font-size:12px;border-radius:6px;padding:2px 8px;border:1px solid var(--line)}.chip.ok{color:var(--acc)}.chip.warn{color:var(--warn)}\nh2{font-size:20px;margin:18px 0 8px}h3{font-size:16px;margin:18px 0 6px}h4{font-size:15px}.metric{color:var(--mute);font-size:13px}\na{color:var(--acc)}table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);vertical-align:top}\nth{color:var(--mute);font-weight:600}.st{white-space:nowrap}.st-published{color:var(--acc);font-weight:600}.st-blocked,.st-publish_failed,.st-draft_failed{color:var(--warn)}\n.tbl{overflow-x:auto}footer{color:var(--mute);font-size:12px;margin-top:20px}.empty{color:var(--mute)}\n</style></head><body><div class=\"wrap\">\n<header><h1>Review Pulse</h1><p>Weekly product pulse and fee explainer for ChatGPT Android (India), built from Google Play reviews by an AI agent. Published only after human approval.</p></header>\n<div class=\"flow\"><span>Mon 07:00 · collect reviews</span><span>Claude tags themes</span><span>code computes stats</span><span>Claude drafts + validator</span><span class=\"gate\">Human approval</span><span>MCP → Google Doc + Gmail draft</span><span>this page</span></div>\n${body}\n<section class=\"card\"><h2>Every week</h2><div class=\"tbl\"><table><thead><tr><th>Week</th><th>Dates</th><th>Status</th><th>Top themes</th><th>Fee issue</th></tr></thead><tbody>${rows || '<tr><td colspan=\"5\">No runs yet</td></tr>'}</tbody></table></div></section>\n<footer>Live from the Review Pulse database · page generated ${new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 16).replace('T', ' ')} IST · read-only</footer>\n</div></body></html>`;\nreturn [{ json: { html } }];\n"
+      },
+      "id": "10a815b4-2b13-4505-8b6f-735dcc1f851a",
+      "name": "Render page",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              },
+              {
+                "name": "Cache-Control",
+                "value": "public, max-age=300"
+              }
+            ]
+          }
+        }
+      },
+      "id": "293cb553-a3fc-4f7f-93ca-40c7a95367c5",
+      "name": "Send page",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Review Pulse – 6 Live page (public, read-only)\nServes the latest **published** pulse + explainer and the status of every week, straight from the runs tab.\n\n• Publish this workflow, then open the **Production URL** of the Webhook node.\n• `?week=2026-W40` shows an older week.\n• Read-only: it cannot start runs, see the Doc/Gmail links or send anything.",
+        "height": 240,
+        "width": 560
+      },
+      "id": "a6de6835-deda-4876-8529-4e43512de29a",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        20
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Read runs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read runs": {
+      "main": [
+        [
+          {
+            "node": "Render page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render page": {
+      "main": [
+        [
+          {
+            "node": "Send page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

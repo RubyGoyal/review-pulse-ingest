@@ -1,0 +1,932 @@
+{
+  "name": "Review Pulse – 3b Analyse v2",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "42030cf1-9204-4c25-b4bf-06b8b66d5bac",
+      "name": "Run manually",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "d3aff2cb-2c49-4a63-bb3c-ea3501adfcf9",
+      "name": "When called by orchestrator",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "1EOhIUlNS4RBGThElb2kOHIdniqzQJScYD_EYkvqvcD0",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "config",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "c47fca8c-6d34-4dff-989f-c04c1e7439b5",
+      "name": "Read config",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        240,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "1EOhIUlNS4RBGThElb2kOHIdniqzQJScYD_EYkvqvcD0",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "themes",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "91b6085f-8d5b-44e6-beae-cb0f384fdfc2",
+      "name": "Read themes",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        460,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "1EOhIUlNS4RBGThElb2kOHIdniqzQJScYD_EYkvqvcD0",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "fee_types",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "9bdf88b0-b43a-4d5d-844f-991ca74e838e",
+      "name": "Read fee_types",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        680,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "1EOhIUlNS4RBGThElb2kOHIdniqzQJScYD_EYkvqvcD0",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "reviews",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "33beabaa-31f3-4cfc-85bd-f9d5de141aa8",
+      "name": "Read reviews",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        900,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---- Pick reviews that still need a Claude label and build requests ----\nconst DEFAULT_MODEL = 'claude-haiku-5-5';\nconst BATCH = 25;\nconst CHUNK = 400;        // reviews per loop; each loop is saved before the next starts (checkpoint)\nconst MAX_LOOPS = 10;     // safety guard: never loop forever\nconst loop = $runIndex;   // 0 on first pass, 1 on second, ...\n\nconst cfg = Object.fromEntries($('Read config').all(0, 0).map(i => [i.json.key, String(i.json.value ?? '')]));\nconst model = /\\d/.test(cfg.tagging_model || '') ? cfg.tagging_model : DEFAULT_MODEL;\nconst themes = $('Read themes').all(0, 0).map(i => i.json).filter(t => String(t.active).toUpperCase() === 'TRUE');\nconst fees = $('Read fee_types').all(0, 0).map(i => i.json).filter(t => String(t.active).toUpperCase() === 'TRUE');\nconst reviews = $input.all().map(i => i.json);   // fresh read of the Sheet on every loop\n\n// priority: base sample first (theme shares depend on it), then fee-boost rows; newest first within each\nconst isBase = r => r.sample_reason === 'top_upvoted' || r.sample_reason === 'random';\nconst todo = reviews\n  .filter(r => r.review_id && r.theme_source !== 'claude_v1')\n  .sort((a, b) => (isBase(b) - isBase(a)) || String(b.review_date).localeCompare(String(a.review_date)));\nif (loop >= MAX_LOOPS) return [{ json: { nothing_to_tag: true, stopped_by_guard: true, loops: loop, remaining: todo.length } }];\nconst thisRun = todo.slice(0, CHUNK);\n\nconst themeText = themes.map(t => `- ${t.theme_code} (${t.theme_name}): ${t.definition}. Include: ${t.include_when}.${t.exclude_when ? ' Exclude: ' + t.exclude_when + '.' : ''}`).join('\\n');\nconst feeText = fees.map(f => `- ${f.fee_code} (${f.label}): ${f.definition}. Users say things like: ${f.user_says_like}`).join('\\n');\n\nconst system = `You label Google Play reviews of the ChatGPT Android app (India store) for a product team.\nFor every review return exactly one theme code and exactly one fee code.\n\nTHEMES\n${themeText}\n\nTHEME RULES\n1. Label the main complaint. If the review contains any clear complaint, do not use PRAISE, even if it also praises the app.\n2. If there are several complaints, pick the one the user spends the most words on; if tied, the first one mentioned.\n3. BILLING is only for payments, plan activation, cancellation, renewal or refunds. \"Limits are too tight\", \"pushes me to upgrade\" and \"too expensive\" are LIMITS.\n4. UNCLEAR: text too short or vague to know what the user means (\"nice\", \"bad app\", \"useless\", gibberish), or comments not about using the app (e.g. AI harms the environment). Short generic praise such as \"very useful for study\" is PRAISE.\n5. Image generation that is refused, inaccurate or changes faces is QUALITY. Image or attachment quotas are LIMITS. Login, crashes, lost chats, voice/read-aloud malfunctions and unwanted UI changes are BUGS.\n6. Judge by the text; the star rating is only context.\n7. Reviews may be in Hindi, Hinglish or other languages: understand them and label normally.\n\nFEE CODES (use NONE unless the review clearly describes one of these situations)\n${feeText}\n- NONE: no money/plan confusion described.\n\nOUTPUT\nReturn ONLY a JSON array, one object per review, in the same order as given:\n[{\"id\":\"<id>\",\"theme\":\"<THEME_CODE>\",\"fee\":\"<FEE_CODE or NONE>\"}]\nNo commentary, no markdown fences.`;\n\nif (!thisRun.length) return [{ json: { nothing_to_tag: true, stopped_by_guard: false, loops: loop, remaining: 0 } }];\n\nconst out = [];\nfor (let i = 0; i < thisRun.length; i += BATCH) {\n  const chunk = thisRun.slice(i, i + BATCH);\n  out.push({ json: {\n    nothing_to_tag: false,\n    batch_no: out.length + 1,\n    ids: chunk.map(r => r.review_id),\n    loop,\n    remaining_after_chunk: todo.length - thisRun.length,\n    request: { model, max_tokens: 4000, system, messages: [{ role: 'user', content:\n      'Label these reviews:\\n' + JSON.stringify(chunk.map(r => ({ id: r.review_id, rating: Number(r.rating), text: String(r.text).slice(0, 700) }))) }] }\n  }});\n}\nreturn out;\n"
+      },
+      "id": "466abb7b-ce4e-4c98-a328-0ec00fe95a16",
+      "name": "Select & build batches",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "04d9c7d2-a205-44a0-b566-9c21a6f4a662",
+              "leftValue": "={{ $json.nothing_to_tag }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "9d6284b9-d707-4c23-8cb4-2f537e8514cf",
+      "name": "Anything to tag?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1340,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify((({ temperature, ...rest }) => rest)($json.request)) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 1000
+            }
+          },
+          "timeout": 120000
+        }
+      },
+      "id": "d0b912ae-b512-4c03-9bc3-d6a148ae5332",
+      "name": "Claude: tag batch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        200
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "anthropicApi": {
+          "id": "",
+          "name": "Anthropic account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---- Turn Claude replies into rows to write back (matched on review_id) ----\nconst batches = $('Select & build batches').all(0, $runIndex).map(i => i.json);   // same loop as this run\nconst themeCodes = new Set($('Read themes').all(0, 0).map(i => i.json.theme_code));\nconst feeCodes = new Set($('Read fee_types').all(0, 0).map(i => i.json.fee_code));\nconst rows = []; let parseErrors = 0, invalid = 0;\n\n$input.all().forEach((item, idx) => {\n  const ids = new Set(batches[idx]?.ids || []);\n  const txt = (item.json.content || []).map(c => c.text || '').join('');\n  const m = txt.match(/\\[[\\s\\S]*\\]/);\n  let arr;\n  try { arr = JSON.parse(m ? m[0] : txt); } catch (e) { parseErrors++; return; }  // batch stays untagged → retried next run\n  for (const o of arr) {\n    const id = String(o.id);\n    if (!ids.has(id)) continue;\n    let theme = String(o.theme || '').trim().toUpperCase();\n    let fee = String(o.fee || 'NONE').trim().toUpperCase();\n    if (!themeCodes.has(theme)) { invalid++; continue; }          // skip, retried next run\n    if (!feeCodes.has(fee)) fee = '';\n    rows.push({ review_id: id, theme_code: theme, fee_type: fee, theme_source: 'claude_v1' });\n  }\n});\nif (!rows.length) throw new Error(`No usable labels. parse errors: ${parseErrors}, invalid: ${invalid}`);\nreturn rows.map(r => ({ json: r }));\n"
+      },
+      "id": "539ddf63-2f00-4bed-8338-3f239de428c2",
+      "name": "Parse labels",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1780,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1EOhIUlNS4RBGThElb2kOHIdniqzQJScYD_EYkvqvcD0",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "reviews",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [
+            "review_id"
+          ],
+          "schema": [
+            {
+              "id": "review_id",
+              "displayName": "review_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "review_date",
+              "displayName": "review_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "week_id",
+              "displayName": "week_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "week_start",
+              "displayName": "week_start",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "rating",
+              "displayName": "rating",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "text",
+              "displayName": "text",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "thumbs_up",
+              "displayName": "thumbs_up",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "app_version",
+              "displayName": "app_version",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "sample_reason",
+              "displayName": "sample_reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fee_mention",
+              "displayName": "fee_mention",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "theme_code",
+              "displayName": "theme_code",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "theme_source",
+              "displayName": "theme_source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fee_type",
+              "displayName": "fee_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "run_id",
+              "displayName": "run_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "ingested_at",
+              "displayName": "ingested_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "e92d9393-e732-412f-8a3c-ca4d2c81e562",
+      "name": "Write labels to reviews",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2000,
+        200
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "1EOhIUlNS4RBGThElb2kOHIdniqzQJScYD_EYkvqvcD0",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "reviews",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "b6b1c6f9-7921-42c0-b886-86f22375bf78",
+      "name": "Read reviews (fresh)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2220,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---- 10-week analysis for one run_id. All numbers are computed here, not by the AI. ----\nconst COMPLAINT = ['QUALITY', 'LIMITS', 'BUGS', 'BILLING'];\nconst FEE_ELIGIBLE = ['F_ACTIVATION', 'F_AUTORENEW', 'F_REFUND'];   // misunderstood charges (not price/limit complaints)\nconst MIN_COVERAGE = 0.95;\n\nconst cfg = Object.fromEntries($('Read config').all(0, 0).map(i => [i.json.key, String(i.json.value ?? '')]));\nconst windowWeeks = Number(cfg.window_weeks || 10);\nconst themes = Object.fromEntries($('Read themes').all(0, 0).map(i => [i.json.theme_code, i.json.theme_name]));\nconst fees = Object.fromEntries($('Read fee_types').all(0, 0).map(i => [i.json.fee_code, i.json.label]));\nconst reviews = $('Read reviews (fresh)').all(0, 0).map(i => i.json);\n\n// --- which week? orchestrator passes run_id; manual runs use the last full ISO week (IST)\nlet runId = '';\ntry { runId = String($('When called by orchestrator').first().json.run_id || ''); } catch (e) {}\nconst isoWeek = d => { const t = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));\n  const day = t.getUTCDay() || 7; t.setUTCDate(t.getUTCDate() + 4 - day);\n  const y = t.getUTCFullYear(); const w = Math.ceil(((t - Date.UTC(y, 0, 1)) / 864e5 + 1) / 7);\n  return `${y}-W${String(w).padStart(2, '0')}`; };\nconst mondayOf = id => { const [y, w] = id.split('-W').map(Number); const jan4 = new Date(Date.UTC(y, 0, 4));\n  const d = new Date(jan4); d.setUTCDate(jan4.getUTCDate() - ((jan4.getUTCDay() || 7) - 1) + (w - 1) * 7); return d; };\nif (!/^\\d{4}-W\\d{2}$/.test(runId)) {\n  const nowIst = new Date(Date.now() + 5.5 * 3600e3);\n  runId = isoWeek(new Date(nowIst.getTime() - 7 * 864e5));\n}\nconst weekStart = mondayOf(runId);\nconst fmt = d => d.toISOString().slice(0, 10);\nconst weeks = Array.from({ length: windowWeeks }, (_, k) => isoWeek(new Date(weekStart.getTime() - (windowWeeks - 1 - k) * 7 * 864e5)));\nconst wset = new Set(weeks);\n\nconst inWin = reviews.filter(r => wset.has(r.week_id));\nconst base = inWin.filter(r => r.sample_reason === 'top_upvoted' || r.sample_reason === 'random');\nconst tagged = base.filter(r => r.theme_source === 'claude_v1' && r.theme_code);\nconst coverage = base.length ? tagged.length / base.length : 0;\nconst coverageAll = inWin.length ? inWin.filter(r => r.theme_source === 'claude_v1').length / inWin.length : 0;\nconst thisWeek = tagged.filter(r => r.week_id === runId);\n\n// --- theme stats\nconst stat = rows => {\n  const by = {};\n  for (const r of rows) {\n    const t = r.theme_code; by[t] = by[t] || { n: 0, sumRating: 0, neg: 0 };\n    by[t].n++; by[t].sumRating += Number(r.rating); if (Number(r.rating) <= 2) by[t].neg++;\n  }\n  return Object.fromEntries(Object.entries(by).map(([t, v]) => [t, {\n    name: themes[t] || t, n: v.n, share: +(v.n / rows.length).toFixed(3),\n    avg_rating: +(v.sumRating / v.n).toFixed(2), neg_share: +(v.neg / v.n).toFixed(2) }]));\n};\nconst window = stat(tagged);\nconst week = thisWeek.length ? stat(thisWeek) : {};\nconst ranked = COMPLAINT.filter(t => window[t])\n  .map(t => ({ code: t, score: +(window[t].n * window[t].neg_share).toFixed(1) }))\n  .sort((a, b) => b.score - a.score);\nconst top3 = ranked.slice(0, 3).map(x => x.code);\n\n// trend per top theme: share in last half of window vs first half\nconst half = Math.floor(windowWeeks / 2);\nconst early = new Set(weeks.slice(0, half)), late = new Set(weeks.slice(half));\nconst shareIn = (set, t) => { const rs = tagged.filter(r => set.has(r.week_id)); return rs.length ? rs.filter(r => r.theme_code === t).length / rs.length : 0; };\nconst trends = Object.fromEntries(top3.map(t => {\n  const a = shareIn(early, t), b = shareIn(late, t), d = b - a;\n  return [t, { early_share: +a.toFixed(3), late_share: +b.toFixed(3),\n    direction: Math.abs(d) < 0.03 ? 'stable' : d > 0 ? 'rising' : 'falling',\n    this_week_share: week[t]?.share ?? null }];\n}));\n\n// --- fee issue (all low-star rows incl. fee boost)\nconst feeRows = inWin.filter(r => r.theme_source === 'claude_v1' && FEE_ELIGIBLE.includes(r.fee_type) && Number(r.rating) <= 3);\nconst feeCount = {}; for (const r of feeRows) feeCount[r.fee_type] = (feeCount[r.fee_type] || 0) + 1;\nconst feeRank = Object.entries(feeCount).sort((a, b) => b[1] - a[1]);\nconst feeCode = feeRank[0]?.[0] || '';\nconst feeOf = (set) => feeRows.filter(r => r.fee_type === feeCode && set.has(r.week_id)).length;\nconst billingLow = set => inWin.filter(r => set.has(r.week_id) && String(r.fee_mention).toUpperCase() === 'TRUE' && Number(r.rating) <= 3).length;\nconst feeEarly = feeOf(early), feeLate = feeOf(late);\nconst feeEarlyShare = billingLow(early) ? feeEarly / billingLow(early) : 0;\nconst feeLateShare = billingLow(late) ? feeLate / billingLow(late) : 0;\nconst feeDirection = Math.abs(feeLateShare - feeEarlyShare) < 0.005 ? 'stable' : feeLateShare > feeEarlyShare ? 'rising' : 'falling';\n\n// --- quote candidates: verbatim, specific, low-star, recent first\nconst words = s => String(s).trim().split(/\\s+/).length;\nconst pick = (rows, n) => rows\n  .filter(r => Number(r.rating) <= 2 && words(r.text) >= 10 && words(r.text) <= 60 && !/https?:\\/\\/|@\\w+\\.\\w+|\\b\\d{10}\\b/.test(r.text))\n  .sort((a, b) => String(b.review_date).localeCompare(String(a.review_date)) || Number(b.thumbs_up) - Number(a.thumbs_up))\n  .slice(0, n)\n  .map(r => ({ review_id: r.review_id, date: String(r.review_date).slice(0, 10), rating: Number(r.rating), text: String(r.text).trim() }));\nconst quotes = {\n  themes: Object.fromEntries(top3.map(t => [t, pick(tagged.filter(r => r.theme_code === t), 5)])),\n  fee: pick(feeRows.filter(r => r.fee_type === feeCode), 5),\n};\n\nconst status = (coverage >= MIN_COVERAGE && coverageAll >= MIN_COVERAGE) ? (feeCode ? 'analysed' : 'analysed_no_fee_issue') : 'tagging_in_progress';\nconst summary = {\n  run_id: runId, week_start: fmt(weekStart), week_end: fmt(new Date(weekStart.getTime() + 6 * 864e5)),\n  status, window_from: fmt(mondayOf(weeks[0])), window_to: fmt(new Date(weekStart.getTime() + 6 * 864e5)),\n  base_n: tagged.length,\n  theme_stats_json: JSON.stringify({ window, this_week: week, ranking: ranked, trends, coverage: +coverage.toFixed(3), coverage_all: +coverageAll.toFixed(3), this_week_n: thisWeek.length }),\n  top_themes: top3.join(','),\n  quotes_json: JSON.stringify(quotes),\n  fee_code: feeCode,\n  fee_count: feeCount[feeCode] || 0,\n  fee_trend: feeCode ? `${feeEarly} -> ${feeLate} (${(feeEarlyShare * 100).toFixed(1)}% -> ${(feeLateShare * 100).toFixed(1)}% of low-star billing reviews), ${feeDirection}` : '',\n  error: status === 'tagging_in_progress' ? `Tagged: base ${(coverage * 100).toFixed(0)}%, all ${(coverageAll * 100).toFixed(0)}% – run again to continue` : '',\n  updated_at: new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 19),\n};\nreturn [{ json: summary }];\n"
+      },
+      "id": "9ac9b1d7-6fe7-46c5-b388-f9923ad43129",
+      "name": "Compute 10-week stats",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "1EOhIUlNS4RBGThElb2kOHIdniqzQJScYD_EYkvqvcD0",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "runs",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [
+            "run_id"
+          ],
+          "schema": [
+            {
+              "id": "run_id",
+              "displayName": "run_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "week_start",
+              "displayName": "week_start",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "week_end",
+              "displayName": "week_end",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "window_from",
+              "displayName": "window_from",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "window_to",
+              "displayName": "window_to",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "base_n",
+              "displayName": "base_n",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "theme_stats_json",
+              "displayName": "theme_stats_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "top_themes",
+              "displayName": "top_themes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "quotes_json",
+              "displayName": "quotes_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fee_code",
+              "displayName": "fee_code",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fee_count",
+              "displayName": "fee_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fee_trend",
+              "displayName": "fee_trend",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "weekly_pulse",
+              "displayName": "weekly_pulse",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "explainer_json",
+              "displayName": "explainer_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "validation_report",
+              "displayName": "validation_report",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "approval_sent_at",
+              "displayName": "approval_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "approved_at",
+              "displayName": "approved_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "approver_comment",
+              "displayName": "approver_comment",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "doc_url",
+              "displayName": "doc_url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "gmail_draft_id",
+              "displayName": "gmail_draft_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "error",
+              "displayName": "error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "updated_at",
+              "displayName": "updated_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "e66a4296-f11f-4c28-b02e-be398d6a741b",
+      "name": "Save run",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2660,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Review Pulse – 3b Analyse (v2)\n**Loop:** Read reviews → tag next 400 untagged (base sample first) → write back → loop again, until nothing is left (guard: 10 loops). Every chunk is saved before the next, so an interrupted run resumes where it stopped.\n\n**Then:** computes the 10-week stats + fee issue (code, not AI) and saves to `runs`. Status is `analysed` only when ≥95% of reviews in the window are tagged.\n\nOne click does the one-time backfill (~10 min). Weekly runs take ~2 min.",
+        "height": 300,
+        "width": 520
+      },
+      "id": "071476bf-b626-445b-bb50-0b5ff0eab388",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -160
+      ]
+    }
+  ],
+  "connections": {
+    "Run manually": {
+      "main": [
+        [
+          {
+            "node": "Read config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When called by orchestrator": {
+      "main": [
+        [
+          {
+            "node": "Read config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read config": {
+      "main": [
+        [
+          {
+            "node": "Read themes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read themes": {
+      "main": [
+        [
+          {
+            "node": "Read fee_types",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read fee_types": {
+      "main": [
+        [
+          {
+            "node": "Read reviews",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read reviews": {
+      "main": [
+        [
+          {
+            "node": "Select & build batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select & build batches": {
+      "main": [
+        [
+          {
+            "node": "Anything to tag?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anything to tag?": {
+      "main": [
+        [
+          {
+            "node": "Claude: tag batch",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Read reviews (fresh)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude: tag batch": {
+      "main": [
+        [
+          {
+            "node": "Parse labels",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse labels": {
+      "main": [
+        [
+          {
+            "node": "Write labels to reviews",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write labels to reviews": {
+      "main": [
+        [
+          {
+            "node": "Read reviews",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read reviews (fresh)": {
+      "main": [
+        [
+          {
+            "node": "Compute 10-week stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute 10-week stats": {
+      "main": [
+        [
+          {
+            "node": "Save run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

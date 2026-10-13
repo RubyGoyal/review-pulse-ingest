@@ -1,0 +1,1045 @@
+{
+  "name": "Review Pulse – 4 Draft & validate",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "78092012-4390-4506-bbc2-aa1b044afdf2",
+      "name": "Run manually",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "80751ebc-5425-4edf-9c18-2a7cef60915c",
+      "name": "When called by orchestrator",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "1EOhIUlNS4RBGThElb2kOHIdniqzQJScYD_EYkvqvcD0",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "config",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "e22797b1-8452-4af2-97d1-0f3b07ff80f1",
+      "name": "Read config",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        220,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "1EOhIUlNS4RBGThElb2kOHIdniqzQJScYD_EYkvqvcD0",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "fee_types",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "1724b65d-077f-4311-b376-bf94380f0d7a",
+      "name": "Read fee_types",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        440,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "1EOhIUlNS4RBGThElb2kOHIdniqzQJScYD_EYkvqvcD0",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "runs",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "ae5421f2-8586-45ec-bbd8-f9b7d71a2efd",
+      "name": "Read runs",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        660,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "1EOhIUlNS4RBGThElb2kOHIdniqzQJScYD_EYkvqvcD0",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "explainers",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "9c4e7d56-a12e-4175-bb90-8721eaefbaae",
+      "name": "Read explainers",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        880,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "1EOhIUlNS4RBGThElb2kOHIdniqzQJScYD_EYkvqvcD0",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "sources",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "b97f43fe-91ef-49c4-ac7b-d75b5167aa13",
+      "name": "Read sources",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1100,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---- Pick the run to draft and gather everything the draft needs ----\nconst cfg = Object.fromEntries($('Read config').all(0, 0).map(i => [i.json.key, String(i.json.value ?? '')]));\nconst runs = $('Read runs').all(0, 0).map(i => i.json);\nconst explainers = $('Read explainers').all(0, 0).map(i => i.json);\nconst sources = $('Read sources').all(0, 0).map(i => i.json);\n\nlet runId = '';\ntry { runId = String($('When called by orchestrator').first().json.run_id || ''); } catch (e) {}\nconst draftable = r => ['analysed', 'draft_failed', 'draft_ready'].includes(String(r.status));\nconst run = runId ? runs.find(r => r.run_id === runId)\n                  : runs.filter(draftable).sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)))[0];\nif (!run) throw new Error(`No run to draft${runId ? ' for ' + runId : ''}. Run the Analyse workflow first.`);\nif (!draftable(run)) throw new Error(`Run ${run.run_id} has status \"${run.status}\" – it must be analysed before drafting.`);\nif (!run.fee_code) throw new Error(`Run ${run.run_id} has no fee issue; nothing to explain.`);\n\nconst exp = explainers\n  .filter(e => e.fee_code === run.fee_code && String(e.status) === 'approved')\n  .sort((a, b) => String(b.version).localeCompare(String(a.version), undefined, { numeric: true }))[0];\nif (!exp) throw new Error(`No approved explainer for ${run.fee_code}. Add one to the explainers tab first.`);\n\n// Approved explainer text is reused verbatim, except its review date range, which follows this run's window.\nconst MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];\nconst ymd = v => { const [y, m, d] = String(v).slice(0, 10).split('-').map(Number); return { y, m, d }; };\nconst a = ymd(run.window_from), b = ymd(run.window_to);\nconst range = a.y && b.y ? `from ${a.d} ${MON[a.m - 1]}${a.y !== b.y ? ' ' + a.y : ''} to ${b.d} ${MON[b.m - 1]} ${b.y}` : '';\nconst RANGE_RE = /\\bfrom \\d{1,2} [A-Z][a-z]{2,8}(?: \\d{4})? to \\d{1,2} [A-Z][a-z]{2,8} \\d{4}\\b/g;\nconst bullets = JSON.parse(exp.bullets_json).map(t => range ? String(t).replace(RANGE_RE, range) : t);\n\nconst srcs = sources.filter(s => s.fee_code === run.fee_code && String(s.active).toUpperCase() === 'TRUE');\nconst stats = JSON.parse(run.theme_stats_json);\nconst quotes = JSON.parse(run.quotes_json);\nreturn [{ json: {\n  run_id: run.run_id, week_start: run.week_start, week_end: run.week_end,\n  window_from: run.window_from, window_to: run.window_to, base_n: Number(run.base_n),\n  top_themes: String(run.top_themes).split(',').filter(Boolean),\n  fee_code: run.fee_code, fee_count: Number(run.fee_count), fee_trend: run.fee_trend,\n  stats, quotes,\n  explainer: { version: exp.version, bullets, urls: String(exp.source_urls).split(/\\s+/).filter(Boolean) },\n  sources: srcs.map(s => ({ url: s.url, title: s.title, publisher: s.publisher })),\n  cfg: { word_limit: Number(cfg.pulse_word_limit || 250), max_themes: Number(cfg.max_themes || 5), max_bullets: Number(cfg.max_explainer_bullets || 6),\n         allowed_domains: String(cfg.allowed_source_domains || '').split(',').map(s => s.trim()).filter(Boolean),\n         writing_model: /\\d/.test(cfg.writing_model || '') ? cfg.writing_model : 'claude-sonnet-5-5', timezone: cfg.timezone || 'Asia/Kolkata' },\n}}];\n"
+      },
+      "id": "c38e27e0-6f4a-47e1-a2d3-600f3b9c295e",
+      "name": "Prepare context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// one item per official source URL to fetch\nconst ctx = $('Prepare context').first().json;\nreturn ctx.explainer.urls.map(url => ({ json: { url } }));\n"
+      },
+      "id": "b55823a1-d92c-4734-a209-3337d7bd8198",
+      "name": "List sources",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+            },
+            {
+              "name": "Accept-Language",
+              "value": "en-IN,en;q=0.9"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "33f07b8a-166d-4a7a-9ace-8b6596bcd6ad",
+      "name": "Fetch official page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        300
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---- Check that the official pages still state the facts the explainer relies on ----\n// Key-fact check (stable) instead of a whole-page hash (pages show changing \"Updated x days ago\" text).\nconst KEY_FACTS = {\n  'help.openai.com':        [/transfer/i, /Google Play/i, /refund/i],\n  'support.google.com':     [/Budget\\s*(&|&amp;|and)\\s*history/i, /developer/i, /refund/i],\n  'developer.android.com':  [/three days|3 days/i, /PENDING/, /refund/i],\n};\nconst urls = $('List sources').all().map(i => i.json.url);\nconst today = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);\nconst rows = $input.all().map((item, idx) => {\n  const j = item.json;\n  const url = urls[idx];\n  const host = (String(url).match(/^https?:\\/\\/([^\\/?#:]+)/i) || [])[1] || '';   // no URL() in n8n sandbox\n  const code = Number(j.statusCode ?? (j.error ? 0 : 200));\n  const body = String(j.body ?? j.data ?? '');\n  const text = body.replace(/<script[\\s\\S]*?<\\/script>|<style[\\s\\S]*?<\\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\\s+/g, ' ');\n  const facts = KEY_FACTS[host] || [];\n  const found = facts.filter(re => re.test(text)).length;\n  let status;\n  if (!body || code >= 400 || j.error) status = 'unreachable';          // blocked / down → can't verify this week\n  else if (!facts.length) status = 'fetched_no_check';\n  else status = found === facts.length ? 'verified' : 'facts_missing';  // page changed → needs human review\n  return { url, last_fetched: today, content_hash: `facts ${found}/${facts.length}`, fetch_status: status };\n});\nreturn rows.map(r => ({ json: r }));\n"
+      },
+      "id": "ebf1ebd5-2098-4b71-afa0-a1a19d3334a9",
+      "name": "Verify sources",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "1EOhIUlNS4RBGThElb2kOHIdniqzQJScYD_EYkvqvcD0",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "sources",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [
+            "url"
+          ],
+          "schema": [
+            {
+              "id": "fee_code",
+              "displayName": "fee_code",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "url",
+              "displayName": "url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "title",
+              "displayName": "title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "publisher",
+              "displayName": "publisher",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "active",
+              "displayName": "active",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "last_fetched",
+              "displayName": "last_fetched",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "content_hash",
+              "displayName": "content_hash",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fetch_status",
+              "displayName": "fetch_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d6e4e090-651d-468a-9f49-bc03dd1f4ef2",
+      "name": "Update sources tab",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2200,
+        120
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---- Ask Claude for the prose only: theme one-liners, quote picks (verbatim excerpts), observation, 3 actions ----\nconst ctx = $('Prepare context').first().json;\nconst feeLabels = Object.fromEntries($('Read fee_types').all(0, 0).map(i => [i.json.fee_code, i.json.label]));\nconst pct = x => Math.round(Number(x) * 100);\nconst t = ctx.stats;\nconst m = String(ctx.fee_trend).match(/(\\d+)\\s*->\\s*(\\d+)\\s*\\(([\\d.]+)%\\s*->\\s*([\\d.]+)%.*\\),\\s*(\\w+)/) || [];\nconst weeks = 10;\nconst facts = {\n  week_end: ctx.week_end, window: `${ctx.window_from} to ${ctx.window_to}`, weeks, reviews_analysed: ctx.base_n,\n  top_themes: ctx.top_themes.map(code => ({\n    code, name: t.window[code].name,\n    share_pct: pct(t.window[code].share), rated_1_2_star_pct: pct(t.window[code].neg_share),\n    trend: t.trends[code].direction, first_half_pct: pct(t.trends[code].early_share), second_half_pct: pct(t.trends[code].late_share),\n    this_week_pct: t.trends[code].this_week_share == null ? null : pct(t.trends[code].this_week_share),\n  })),\n  fee_issue: {\n    code: ctx.fee_code, label: feeLabels[ctx.fee_code] || ctx.fee_code,\n    reviews_in_window: ctx.fee_count, per_week_avg: Math.round(ctx.fee_count / weeks),\n    first_half_count: Number(m[1] || 0), second_half_count: Number(m[2] || 0),\n    first_half_share_of_low_star_billing_pct: Number(m[3] || 0), second_half_share_pct: Number(m[4] || 0),\n    trend: m[5] || 'unknown', price_users_report_inr: 399,\n  },\n  quote_candidates: Object.fromEntries(Object.entries(ctx.quotes.themes).map(([k, v]) => [k, v.map(q => ({ review_id: q.review_id, rating: q.rating, text: q.text }))])),\n  fee_quote_candidates: ctx.quotes.fee.map(q => ({ review_id: q.review_id, rating: q.rating, text: q.text })),\n};\n\nconst system = `You write the prose parts of a weekly internal product pulse for the ChatGPT Android app (India), for a product team.\nAll numbers and quotes are inserted by code; you supply short text and choices only.\n\nReturn ONLY this JSON (no markdown fences):\n{\n \"theme_notes\": {\"<THEME_CODE>\": \"<max 9 words: what users complain about in this theme>\", ... one per top theme},\n \"quotes\": {\"<THEME_CODE>\": {\"review_id\": \"<id from that theme's candidates>\", \"excerpt\": \"<exact contiguous excerpt, 6-22 words>\"}, ... one per top theme},\n \"observation\": \"<max 50 words: what is going wrong or trending, centred on the fee issue>\",\n \"actions\": [ {\"title\": \"<max 6 words>\", \"detail\": \"<max 16 words>\", \"metric\": \"<numerator ÷ denominator>\"} x3 ]\n}\n\nRULES\n- Excerpts must be copied character-for-character from the candidate text (same spelling, punctuation and casing). Pick specific, representative complaints; skip candidates that are offensive, off-topic or mostly gibberish.\n- Use ONLY numbers that appear in FACTS. Do not compute new numbers. Prefer few numbers in prose; the template already shows theme shares.\n- Describe trends exactly as given in FACTS (\"stable\", \"rising\", \"falling\"). Never say \"doubled\" or \"spiking\" unless FACTS say rising.\n- Action 1 must address the fee issue; actions 2 and 3 address the top themes.\n- Each metric is a trackable ratio that NAMES what is counted on both sides, written \"X ÷ Y\", e.g. \"Go purchases active in-app within 10 min ÷ Go purchases confirmed by Google Play\" or \"limit-related 1–2★ reviews ÷ all reviews\". Never put plain numbers in a metric.\n- Do not claim things the quotes or FACTS do not support (e.g. \"mostly\", \"most users\").\n- Neutral, factual tone. No exclamation marks. British/Indian English spelling.`;\n\nlet feedback = '';\nconst prev = $input.first().json;\nif (prev && prev.validation_report) {\n  const rep = JSON.parse(prev.validation_report);\n  feedback = '\\n\\nYOUR PREVIOUS ANSWER FAILED THESE CHECKS – fix them:\\n- ' + rep.failures.join('\\n- ');\n}\nreturn [{ json: {\n  attempt: feedback ? 2 : 1,\n  facts,\n  request: { model: ctx.cfg.writing_model, max_tokens: 2000, system,\n    messages: [{ role: 'user', content: 'FACTS:\\n' + JSON.stringify(facts, null, 1) + feedback }] },\n}}];\n"
+      },
+      "id": "3afa233f-568a-44f6-b663-9fad3a5e19f2",
+      "name": "Build draft request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify((({ temperature, ...rest }) => rest)($json.request)) }}",
+        "options": {
+          "timeout": 180000
+        }
+      },
+      "id": "4a4b5134-cbc7-464b-975a-3b9dbb3535e0",
+      "name": "Claude: draft",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2420,
+        400
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "anthropicApi": {
+          "id": "",
+          "name": "Anthropic account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---- Assemble pulse + explainer from code-owned data, then validate everything ----\nconst ctx = $('Prepare context').first().json;\nconst verification = $('Verify sources').all().map(i => i.json);\nlet attempt = 1; try { $('Build redraft request').first(); attempt = 2; } catch (e) {}\nconst req = $(attempt === 1 ? 'Build draft request' : 'Build redraft request').first().json;\nconst facts = req.facts;\nconst failures = [];\n\n// parse Claude's JSON\nconst raw = ($input.first().json.content || []).map(c => c.text || '').join('');\nlet d = {};\ntry { d = JSON.parse((raw.match(/\\{[\\s\\S]*\\}/) || [raw])[0]); } catch (e) { failures.push('Reply was not valid JSON'); }\n\nconst pct = x => Math.round(Number(x) * 100);\nconst fmt = s => { const dt = new Date(s + 'T00:00:00Z'); return isNaN(dt) ? s : dt.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }); };\nconst words = s => String(s).replace(/[#*_]/g, '').trim().split(/\\s+/).filter(Boolean).length;\nconst top = ctx.top_themes;\nconst sentence = x => { const t = String(x || '').trim(); return t && !/[.!?]$/.test(t) ? t + '.' : t; };\nconst W = ctx.stats.window;\n\n// --- quotes: must be exact excerpts of a candidate from the right theme\nconst quoteLines = [];\nfor (const code of top) {\n  const q = d.quotes?.[code];\n  const cand = (ctx.quotes.themes[code] || []).find(c => c.review_id === q?.review_id);\n  const ex = String(q?.excerpt || '').trim();\n  if (!cand) { failures.push(`Quote for ${code}: review_id not among that theme's candidates`); continue; }\n  if (!ex || !cand.text.includes(ex)) { failures.push(`Quote for ${code}: excerpt is not an exact substring of review ${cand.review_id}`); continue; }\n  const n = words(ex);\n  if (n < 6 || n > 22) failures.push(`Quote for ${code}: excerpt has ${n} words (need 6–22)`);\n  quoteLines.push(`- \"${ex}\" (${cand.rating}★, ${fmt(cand.date)})`);\n}\n\n// --- numbers in Claude's prose must come from FACTS\nconst allowed = new Set((JSON.stringify(facts).match(/\\d+(\\.\\d+)?/g) || []).map(Number));\n[1, 2, 3, 4, 5].forEach(n => allowed.add(n));\nconst prose = [...Object.values(d.theme_notes || {}), d.observation || '', ...(d.actions || []).flatMap(a => [a.title || '', a.detail || ''])].join(' ');\nconst bad = [...new Set((prose.replace(/(\\d),(\\d{3})/g, '$1$2').match(/\\d+(\\.\\d+)?/g) || []).map(Number).filter(n => !allowed.has(n)))];\nif (bad.length) failures.push(`Prose uses numbers not in FACTS: ${bad.join(', ')}`);\nif (/doubl|spik|surg/i.test(prose) && facts.fee_issue.trend !== 'rising') failures.push('Prose describes a rise but the fee trend is ' + facts.fee_issue.trend);\n\n// --- actions\nconst actions = Array.isArray(d.actions) ? d.actions : [];\nif (actions.length !== 3) failures.push(`Need exactly 3 actions, got ${actions.length}`);\n// a metric must be a named ratio: words on both sides of ÷, not raw numbers like \"80 ÷ 1197\"\nconst named = s => (String(s).match(/[A-Za-z]{3,}/g) || []).length >= 2;\nactions.forEach((a, i) => {\n  const parts = String(a.metric || '').split(/÷|\\s\\/\\s/);\n  if (parts.length !== 2 || !named(parts[0]) || !named(parts[1]))\n    failures.push(`Action ${i + 1} metric must name what is counted on both sides, e.g. \"Go purchases active in-app within 10 min ÷ Go purchases confirmed by Google Play\" (got \"${a.metric}\")`);\n});\n\n// --- themes\nif (top.length !== 3) failures.push(`Need 3 top themes, got ${top.length}`);\nif (Object.keys(W).filter(k => k !== 'UNCLEAR').length > ctx.cfg.max_themes) failures.push('More than 5 themes');\nfor (const c of top) if (!d.theme_notes?.[c]) failures.push(`Missing theme note for ${c}`);\n\n// --- assemble pulse (all numbers from stats)\nconst L = [];\nL.push('# ChatGPT Android (India): Weekly Product Pulse');\nL.push(`**Week ending ${fmt(ctx.week_end)}** · ${ctx.base_n} Google Play reviews, ${fmt(ctx.window_from)} – ${fmt(ctx.window_to)}`, '');\nL.push('## Top themes');\ntop.forEach((c, i) => L.push(`${i + 1}. **${W[c].name}:** ${pct(W[c].share)}% of reviews, ${pct(W[c].neg_share)}% rated 1–2★. ${sentence(d.theme_notes?.[c])}`));\nL.push('', '## What users say', ...quoteLines, '', '## Key observation', sentence(d.observation), '', '## Action ideas');\nactions.forEach((a, i) => L.push(`${i + 1}. **${String(a.title).trim()}:** ${sentence(a.detail)}`, `   *Metric:* ${String(a.metric).trim()}`));\nconst pulse = L.join('\\n');\nconst pulseWords = words(pulse);\nif (pulseWords > ctx.cfg.word_limit) failures.push(`Pulse is ${pulseWords} words; limit ${ctx.cfg.word_limit}. Shorten by ${pulseWords - ctx.cfg.word_limit}+ words`);\n\n// --- explainer (approved text, reused verbatim) + verification\nconst today = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);\nconst bullets = ctx.explainer.bullets;\nconst urls = ctx.explainer.urls;\nconst hostOf = u => ((String(u).match(/^https?:\\/\\/([^\\/?#:]+)/i) || [])[1] || '').toLowerCase();\nconst allowedHosts = new Set([...ctx.cfg.allowed_domains.map(s => s.toLowerCase()), ...ctx.sources.map(s => hostOf(s.url))].filter(Boolean));\nif (bullets.length < 1 || bullets.length > ctx.cfg.max_bullets) failures.push(`Explainer has ${bullets.length} bullets (max ${ctx.cfg.max_bullets})`);\nif (urls.length < 2) failures.push('Explainer needs at least 2 official links');\nconst offDomain = urls.filter(u => !allowedHosts.has(hostOf(u)));\nif (offDomain.length) failures.push('Links not on official domains: ' + offDomain.join(', '));\nconst needsReview = verification.filter(v => v.fetch_status === 'facts_missing').map(v => v.url);\nconst unverified = verification.filter(v => v.fetch_status === 'unreachable').map(v => v.url);\nconst srcTitle = u => (ctx.sources.find(s => s.url === u) || {});\nconst expMd = [\n  ...bullets.map(b => { const k = b.indexOf('. '); return k > 0 && k < 60 ? `- **${b.slice(0, k + 1)}** ${b.slice(k + 2)}` : `- ${b}`; }),\n  '', '**Sources**', ...urls.map((u, i) => `${i + 1}. ${srcTitle(u).publisher || hostOf(u)}: [${srcTitle(u).title || u}](${u})`),\n  '', `**Last checked: ${fmt(today)}**`,\n].join('\\n');\nif (!/Last checked: /.test(expMd)) failures.push('Explainer missing \"Last checked\"');\n\nconst passed = failures.length === 0;\nconst report = {\n  attempt, passed, failures, pulse_words: pulseWords,\n  checks: { quotes_verbatim: quoteLines.length === 3, numbers_from_stats: bad.length === 0, actions: actions.length, explainer_bullets: bullets.length, official_links: urls.length },\n  sources: verification.map(v => ({ url: v.url, status: v.fetch_status, facts: v.content_hash })),\n  explainer_needs_review: needsReview, explainer_unverified: unverified,\n};\nconst explainer = { fee_code: ctx.fee_code, version: ctx.explainer.version, bullets, source_links: urls, last_checked: today, needs_review: needsReview.length > 0, markdown: expMd };\nreturn [{ json: {\n  run_id: ctx.run_id,\n  status: passed ? 'draft_ready' : (attempt === 1 ? 'needs_redraft' : 'draft_failed'),\n  weekly_pulse: pulse,\n  explainer_json: JSON.stringify(explainer),\n  validation_report: JSON.stringify(report),\n  error: passed ? '' : failures.join(' | ').slice(0, 500),\n  updated_at: new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 19),\n}}];\n"
+      },
+      "id": "36110929-d0ec-4615-8963-0009bc42886d",
+      "name": "Assemble & validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ecc81241-ae89-4fbd-8fff-b094d1297f92",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "needs_redraft",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "bc40e89a-8dfe-46d0-9a44-8a800ebaea7c",
+      "name": "Needs redraft?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2860,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---- Ask Claude for the prose only: theme one-liners, quote picks (verbatim excerpts), observation, 3 actions ----\nconst ctx = $('Prepare context').first().json;\nconst feeLabels = Object.fromEntries($('Read fee_types').all(0, 0).map(i => [i.json.fee_code, i.json.label]));\nconst pct = x => Math.round(Number(x) * 100);\nconst t = ctx.stats;\nconst m = String(ctx.fee_trend).match(/(\\d+)\\s*->\\s*(\\d+)\\s*\\(([\\d.]+)%\\s*->\\s*([\\d.]+)%.*\\),\\s*(\\w+)/) || [];\nconst weeks = 10;\nconst facts = {\n  week_end: ctx.week_end, window: `${ctx.window_from} to ${ctx.window_to}`, weeks, reviews_analysed: ctx.base_n,\n  top_themes: ctx.top_themes.map(code => ({\n    code, name: t.window[code].name,\n    share_pct: pct(t.window[code].share), rated_1_2_star_pct: pct(t.window[code].neg_share),\n    trend: t.trends[code].direction, first_half_pct: pct(t.trends[code].early_share), second_half_pct: pct(t.trends[code].late_share),\n    this_week_pct: t.trends[code].this_week_share == null ? null : pct(t.trends[code].this_week_share),\n  })),\n  fee_issue: {\n    code: ctx.fee_code, label: feeLabels[ctx.fee_code] || ctx.fee_code,\n    reviews_in_window: ctx.fee_count, per_week_avg: Math.round(ctx.fee_count / weeks),\n    first_half_count: Number(m[1] || 0), second_half_count: Number(m[2] || 0),\n    first_half_share_of_low_star_billing_pct: Number(m[3] || 0), second_half_share_pct: Number(m[4] || 0),\n    trend: m[5] || 'unknown', price_users_report_inr: 399,\n  },\n  quote_candidates: Object.fromEntries(Object.entries(ctx.quotes.themes).map(([k, v]) => [k, v.map(q => ({ review_id: q.review_id, rating: q.rating, text: q.text }))])),\n  fee_quote_candidates: ctx.quotes.fee.map(q => ({ review_id: q.review_id, rating: q.rating, text: q.text })),\n};\n\nconst system = `You write the prose parts of a weekly internal product pulse for the ChatGPT Android app (India), for a product team.\nAll numbers and quotes are inserted by code; you supply short text and choices only.\n\nReturn ONLY this JSON (no markdown fences):\n{\n \"theme_notes\": {\"<THEME_CODE>\": \"<max 9 words: what users complain about in this theme>\", ... one per top theme},\n \"quotes\": {\"<THEME_CODE>\": {\"review_id\": \"<id from that theme's candidates>\", \"excerpt\": \"<exact contiguous excerpt, 6-22 words>\"}, ... one per top theme},\n \"observation\": \"<max 50 words: what is going wrong or trending, centred on the fee issue>\",\n \"actions\": [ {\"title\": \"<max 6 words>\", \"detail\": \"<max 16 words>\", \"metric\": \"<numerator ÷ denominator>\"} x3 ]\n}\n\nRULES\n- Excerpts must be copied character-for-character from the candidate text (same spelling, punctuation and casing). Pick specific, representative complaints; skip candidates that are offensive, off-topic or mostly gibberish.\n- Use ONLY numbers that appear in FACTS. Do not compute new numbers. Prefer few numbers in prose; the template already shows theme shares.\n- Describe trends exactly as given in FACTS (\"stable\", \"rising\", \"falling\"). Never say \"doubled\" or \"spiking\" unless FACTS say rising.\n- Action 1 must address the fee issue; actions 2 and 3 address the top themes.\n- Each metric is a trackable ratio that NAMES what is counted on both sides, written \"X ÷ Y\", e.g. \"Go purchases active in-app within 10 min ÷ Go purchases confirmed by Google Play\" or \"limit-related 1–2★ reviews ÷ all reviews\". Never put plain numbers in a metric.\n- Do not claim things the quotes or FACTS do not support (e.g. \"mostly\", \"most users\").\n- Neutral, factual tone. No exclamation marks. British/Indian English spelling.`;\n\nlet feedback = '';\nconst prev = $input.first().json;\nif (prev && prev.validation_report) {\n  const rep = JSON.parse(prev.validation_report);\n  feedback = '\\n\\nYOUR PREVIOUS ANSWER FAILED THESE CHECKS – fix them:\\n- ' + rep.failures.join('\\n- ');\n}\nreturn [{ json: {\n  attempt: feedback ? 2 : 1,\n  facts,\n  request: { model: ctx.cfg.writing_model, max_tokens: 2000, system,\n    messages: [{ role: 'user', content: 'FACTS:\\n' + JSON.stringify(facts, null, 1) + feedback }] },\n}}];\n"
+      },
+      "id": "3f426bb1-331c-4639-892c-f9b0fc29f0cd",
+      "name": "Build redraft request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3080,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "anthropicApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify((({ temperature, ...rest }) => rest)($json.request)) }}",
+        "options": {
+          "timeout": 180000
+        }
+      },
+      "id": "2ca6f29e-8847-428d-8b37-b6a7541c90f8",
+      "name": "Claude: redraft",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3300,
+        280
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "anthropicApi": {
+          "id": "",
+          "name": "Anthropic account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---- Assemble pulse + explainer from code-owned data, then validate everything ----\nconst ctx = $('Prepare context').first().json;\nconst verification = $('Verify sources').all().map(i => i.json);\nlet attempt = 1; try { $('Build redraft request').first(); attempt = 2; } catch (e) {}\nconst req = $(attempt === 1 ? 'Build draft request' : 'Build redraft request').first().json;\nconst facts = req.facts;\nconst failures = [];\n\n// parse Claude's JSON\nconst raw = ($input.first().json.content || []).map(c => c.text || '').join('');\nlet d = {};\ntry { d = JSON.parse((raw.match(/\\{[\\s\\S]*\\}/) || [raw])[0]); } catch (e) { failures.push('Reply was not valid JSON'); }\n\nconst pct = x => Math.round(Number(x) * 100);\nconst fmt = s => { const dt = new Date(s + 'T00:00:00Z'); return isNaN(dt) ? s : dt.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }); };\nconst words = s => String(s).replace(/[#*_]/g, '').trim().split(/\\s+/).filter(Boolean).length;\nconst top = ctx.top_themes;\nconst sentence = x => { const t = String(x || '').trim(); return t && !/[.!?]$/.test(t) ? t + '.' : t; };\nconst W = ctx.stats.window;\n\n// --- quotes: must be exact excerpts of a candidate from the right theme\nconst quoteLines = [];\nfor (const code of top) {\n  const q = d.quotes?.[code];\n  const cand = (ctx.quotes.themes[code] || []).find(c => c.review_id === q?.review_id);\n  const ex = String(q?.excerpt || '').trim();\n  if (!cand) { failures.push(`Quote for ${code}: review_id not among that theme's candidates`); continue; }\n  if (!ex || !cand.text.includes(ex)) { failures.push(`Quote for ${code}: excerpt is not an exact substring of review ${cand.review_id}`); continue; }\n  const n = words(ex);\n  if (n < 6 || n > 22) failures.push(`Quote for ${code}: excerpt has ${n} words (need 6–22)`);\n  quoteLines.push(`- \"${ex}\" (${cand.rating}★, ${fmt(cand.date)})`);\n}\n\n// --- numbers in Claude's prose must come from FACTS\nconst allowed = new Set((JSON.stringify(facts).match(/\\d+(\\.\\d+)?/g) || []).map(Number));\n[1, 2, 3, 4, 5].forEach(n => allowed.add(n));\nconst prose = [...Object.values(d.theme_notes || {}), d.observation || '', ...(d.actions || []).flatMap(a => [a.title || '', a.detail || ''])].join(' ');\nconst bad = [...new Set((prose.replace(/(\\d),(\\d{3})/g, '$1$2').match(/\\d+(\\.\\d+)?/g) || []).map(Number).filter(n => !allowed.has(n)))];\nif (bad.length) failures.push(`Prose uses numbers not in FACTS: ${bad.join(', ')}`);\nif (/doubl|spik|surg/i.test(prose) && facts.fee_issue.trend !== 'rising') failures.push('Prose describes a rise but the fee trend is ' + facts.fee_issue.trend);\n\n// --- actions\nconst actions = Array.isArray(d.actions) ? d.actions : [];\nif (actions.length !== 3) failures.push(`Need exactly 3 actions, got ${actions.length}`);\n// a metric must be a named ratio: words on both sides of ÷, not raw numbers like \"80 ÷ 1197\"\nconst named = s => (String(s).match(/[A-Za-z]{3,}/g) || []).length >= 2;\nactions.forEach((a, i) => {\n  const parts = String(a.metric || '').split(/÷|\\s\\/\\s/);\n  if (parts.length !== 2 || !named(parts[0]) || !named(parts[1]))\n    failures.push(`Action ${i + 1} metric must name what is counted on both sides, e.g. \"Go purchases active in-app within 10 min ÷ Go purchases confirmed by Google Play\" (got \"${a.metric}\")`);\n});\n\n// --- themes\nif (top.length !== 3) failures.push(`Need 3 top themes, got ${top.length}`);\nif (Object.keys(W).filter(k => k !== 'UNCLEAR').length > ctx.cfg.max_themes) failures.push('More than 5 themes');\nfor (const c of top) if (!d.theme_notes?.[c]) failures.push(`Missing theme note for ${c}`);\n\n// --- assemble pulse (all numbers from stats)\nconst L = [];\nL.push('# ChatGPT Android (India): Weekly Product Pulse');\nL.push(`**Week ending ${fmt(ctx.week_end)}** · ${ctx.base_n} Google Play reviews, ${fmt(ctx.window_from)} – ${fmt(ctx.window_to)}`, '');\nL.push('## Top themes');\ntop.forEach((c, i) => L.push(`${i + 1}. **${W[c].name}:** ${pct(W[c].share)}% of reviews, ${pct(W[c].neg_share)}% rated 1–2★. ${sentence(d.theme_notes?.[c])}`));\nL.push('', '## What users say', ...quoteLines, '', '## Key observation', sentence(d.observation), '', '## Action ideas');\nactions.forEach((a, i) => L.push(`${i + 1}. **${String(a.title).trim()}:** ${sentence(a.detail)}`, `   *Metric:* ${String(a.metric).trim()}`));\nconst pulse = L.join('\\n');\nconst pulseWords = words(pulse);\nif (pulseWords > ctx.cfg.word_limit) failures.push(`Pulse is ${pulseWords} words; limit ${ctx.cfg.word_limit}. Shorten by ${pulseWords - ctx.cfg.word_limit}+ words`);\n\n// --- explainer (approved text, reused verbatim) + verification\nconst today = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);\nconst bullets = ctx.explainer.bullets;\nconst urls = ctx.explainer.urls;\nconst hostOf = u => ((String(u).match(/^https?:\\/\\/([^\\/?#:]+)/i) || [])[1] || '').toLowerCase();\nconst allowedHosts = new Set([...ctx.cfg.allowed_domains.map(s => s.toLowerCase()), ...ctx.sources.map(s => hostOf(s.url))].filter(Boolean));\nif (bullets.length < 1 || bullets.length > ctx.cfg.max_bullets) failures.push(`Explainer has ${bullets.length} bullets (max ${ctx.cfg.max_bullets})`);\nif (urls.length < 2) failures.push('Explainer needs at least 2 official links');\nconst offDomain = urls.filter(u => !allowedHosts.has(hostOf(u)));\nif (offDomain.length) failures.push('Links not on official domains: ' + offDomain.join(', '));\nconst needsReview = verification.filter(v => v.fetch_status === 'facts_missing').map(v => v.url);\nconst unverified = verification.filter(v => v.fetch_status === 'unreachable').map(v => v.url);\nconst srcTitle = u => (ctx.sources.find(s => s.url === u) || {});\nconst expMd = [\n  ...bullets.map(b => { const k = b.indexOf('. '); return k > 0 && k < 60 ? `- **${b.slice(0, k + 1)}** ${b.slice(k + 2)}` : `- ${b}`; }),\n  '', '**Sources**', ...urls.map((u, i) => `${i + 1}. ${srcTitle(u).publisher || hostOf(u)}: [${srcTitle(u).title || u}](${u})`),\n  '', `**Last checked: ${fmt(today)}**`,\n].join('\\n');\nif (!/Last checked: /.test(expMd)) failures.push('Explainer missing \"Last checked\"');\n\nconst passed = failures.length === 0;\nconst report = {\n  attempt, passed, failures, pulse_words: pulseWords,\n  checks: { quotes_verbatim: quoteLines.length === 3, numbers_from_stats: bad.length === 0, actions: actions.length, explainer_bullets: bullets.length, official_links: urls.length },\n  sources: verification.map(v => ({ url: v.url, status: v.fetch_status, facts: v.content_hash })),\n  explainer_needs_review: needsReview, explainer_unverified: unverified,\n};\nconst explainer = { fee_code: ctx.fee_code, version: ctx.explainer.version, bullets, source_links: urls, last_checked: today, needs_review: needsReview.length > 0, markdown: expMd };\nreturn [{ json: {\n  run_id: ctx.run_id,\n  status: passed ? 'draft_ready' : (attempt === 1 ? 'needs_redraft' : 'draft_failed'),\n  weekly_pulse: pulse,\n  explainer_json: JSON.stringify(explainer),\n  validation_report: JSON.stringify(report),\n  error: passed ? '' : failures.join(' | ').slice(0, 500),\n  updated_at: new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 19),\n}}];\n"
+      },
+      "id": "057c8ab4-eef0-4c8a-a51e-3a4d40d3a815",
+      "name": "Assemble & validate (redraft)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3520,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "1EOhIUlNS4RBGThElb2kOHIdniqzQJScYD_EYkvqvcD0",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "runs",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [
+            "run_id"
+          ],
+          "schema": [
+            {
+              "id": "run_id",
+              "displayName": "run_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "week_start",
+              "displayName": "week_start",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "week_end",
+              "displayName": "week_end",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "window_from",
+              "displayName": "window_from",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "window_to",
+              "displayName": "window_to",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "base_n",
+              "displayName": "base_n",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "theme_stats_json",
+              "displayName": "theme_stats_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "top_themes",
+              "displayName": "top_themes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "quotes_json",
+              "displayName": "quotes_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fee_code",
+              "displayName": "fee_code",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fee_count",
+              "displayName": "fee_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fee_trend",
+              "displayName": "fee_trend",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "weekly_pulse",
+              "displayName": "weekly_pulse",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "explainer_json",
+              "displayName": "explainer_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "validation_report",
+              "displayName": "validation_report",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "approval_sent_at",
+              "displayName": "approval_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "approved_at",
+              "displayName": "approved_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "approver_comment",
+              "displayName": "approver_comment",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "doc_url",
+              "displayName": "doc_url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "gmail_draft_id",
+              "displayName": "gmail_draft_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "error",
+              "displayName": "error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "updated_at",
+              "displayName": "updated_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fc554dec-26b4-45e2-b010-d25396792197",
+      "name": "Save draft to runs",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        3740,
+        460
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Review Pulse – 4 Draft & validate\nClaude writes **only** the prose (theme notes, observation, 3 actions) and **picks** quotes. Code inserts every number from the stats and every quote character-for-character, then validates: ≤250 words, exact quotes, numbers only from stats, 3 ratio metrics, ≤6 explainer bullets, ≥2 official links, Last checked.\n\nFails once → redraft with the exact failures. Fails twice → status `draft_failed` (nothing goes out).\n\nOfficial pages are re-checked for the key facts the explainer relies on (`sources` tab).",
+        "height": 320,
+        "width": 560
+      },
+      "id": "9d9f8468-bce9-46ed-8194-8967d0ce40f7",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -180
+      ]
+    }
+  ],
+  "connections": {
+    "Run manually": {
+      "main": [
+        [
+          {
+            "node": "Read config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When called by orchestrator": {
+      "main": [
+        [
+          {
+            "node": "Read config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read config": {
+      "main": [
+        [
+          {
+            "node": "Read fee_types",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read fee_types": {
+      "main": [
+        [
+          {
+            "node": "Read runs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read runs": {
+      "main": [
+        [
+          {
+            "node": "Read explainers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read explainers": {
+      "main": [
+        [
+          {
+            "node": "Read sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read sources": {
+      "main": [
+        [
+          {
+            "node": "Prepare context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare context": {
+      "main": [
+        [
+          {
+            "node": "List sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List sources": {
+      "main": [
+        [
+          {
+            "node": "Fetch official page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch official page": {
+      "main": [
+        [
+          {
+            "node": "Verify sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify sources": {
+      "main": [
+        [
+          {
+            "node": "Update sources tab",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Build draft request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build draft request": {
+      "main": [
+        [
+          {
+            "node": "Claude: draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude: draft": {
+      "main": [
+        [
+          {
+            "node": "Assemble & validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assemble & validate": {
+      "main": [
+        [
+          {
+            "node": "Needs redraft?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs redraft?": {
+      "main": [
+        [
+          {
+            "node": "Build redraft request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Save draft to runs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build redraft request": {
+      "main": [
+        [
+          {
+            "node": "Claude: redraft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude: redraft": {
+      "main": [
+        [
+          {
+            "node": "Assemble & validate (redraft)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Assemble & validate (redraft)": {
+      "main": [
+        [
+          {
+            "node": "Save draft to runs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

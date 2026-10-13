@@ -1,0 +1,706 @@
+{
+  "name": "Review Pulse – 5a Tool actions",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "workflowInputs",
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "action"
+            },
+            {
+              "name": "run_id"
+            }
+          ]
+        }
+      },
+      "id": "d19b3f5b-9a61-47f6-9a25-8b981098d587",
+      "name": "When called by MCP tool",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "1EOhIUlNS4RBGThElb2kOHIdniqzQJScYD_EYkvqvcD0",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "config",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "f86cb4c5-6efc-4c69-aeee-197a1f352ff4",
+      "name": "Read config",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        220,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "1EOhIUlNS4RBGThElb2kOHIdniqzQJScYD_EYkvqvcD0",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "fee_types",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "c7c00e4c-f16d-48ab-a2f9-6ec620b27867",
+      "name": "Read fee_types",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        440,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "1EOhIUlNS4RBGThElb2kOHIdniqzQJScYD_EYkvqvcD0",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "runs",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "8a9ab40a-b422-4892-a8aa-007ed646ede7",
+      "name": "Read runs",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        660,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---- Build the exact Doc entry / email draft for one run, from the Sheet (never from AI text) ----\nconst input = $('When called by MCP tool').first().json;\nconst action = String(input.action || '').trim();\nconst runId = String(input.run_id || '').trim();\nconst cfg = Object.fromEntries($('Read config').all(0, 0).map(i => [i.json.key, String(i.json.value ?? '')]));\nconst fees = Object.fromEntries($('Read fee_types').all(0, 0).map(i => [i.json.fee_code, i.json.label]));\nconst run = $('Read runs').all(0, 0).map(i => i.json).find(r => r.run_id === runId);\n\nif (!['append_to_doc', 'create_email_draft'].includes(action)) throw new Error(`Unknown action \"${action}\"`);\nif (!run) throw new Error(`Run ${runId} not found`);\nif (!['approved', 'published', 'publish_failed'].includes(String(run.status)))\n  throw new Error(`Run ${runId} is \"${run.status}\". Only approved runs can be published.`);\n\nconst exp = JSON.parse(run.explainer_json);\nconst fmt = s => { const d = new Date(String(s).slice(0, 10) + 'T00:00:00Z'); return isNaN(d) ? s : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }); };\nconst today = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);\nconst themes = String(run.top_themes).split(',').filter(Boolean);\nconst payload = {\n  date: today,\n  week: `${run.run_id} (${fmt(run.week_start)} – ${fmt(run.week_end)})`,\n  top_themes: themes,\n  weekly_pulse: run.weekly_pulse,\n  identified_fee_issue: `${run.fee_code}: ${fees[run.fee_code] || ''} (${run.fee_count} reviews in 10 weeks; ${String(run.fee_trend).split(',').pop().trim()})`,\n  explanation_bullets: exp.bullets,\n  source_links: exp.source_links,\n  last_checked: exp.last_checked,\n};\n\n// already done? → idempotent: return existing result, write nothing\nif (action === 'append_to_doc' && run.doc_url) return [{ json: { skip: true, action, run_id: runId, result: run.doc_url } }];\nif (action === 'create_email_draft' && run.gmail_draft_id) return [{ json: { skip: true, action, run_id: runId, result: run.gmail_draft_id } }];\n\nconst strip = md => String(md).replace(/\\*\\*/g, '').replace(/^#+\\s*/gm, '').replace(/^\\s*\\*(Metric:)\\*/gm, '   $1');\nconst docText = [\n  '', '────────────────────────────────────────',\n  `WEEKLY ENTRY · ${run.run_id} · week ending ${fmt(run.week_end)} · logged ${fmt(today)}`,\n  '────────────────────────────────────────',\n  `date: ${payload.date}`,\n  `top_themes: ${themes.join(', ')}`,\n  `identified_fee_issue: ${payload.identified_fee_issue}`, '',\n  'weekly_pulse:', strip(run.weekly_pulse), '',\n  'explanation_bullets:', ...exp.bullets.map(b => `• ${b}`), '',\n  'source_links:', ...exp.source_links.map(u => `- ${u}`),\n  `Last checked: ${fmt(exp.last_checked)}`, '',\n  'payload_json:', JSON.stringify(payload), '',\n].join('\\n');\n\n// minimal markdown → HTML for the email draft\nconst esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst inline = s => esc(s).replace(/\\*\\*(.+?)\\*\\*/g, '<b>$1</b>').replace(/\\*(.+?)\\*/g, '<i>$1</i>').replace(/\\[(.+?)\\]\\((https?:\\/\\/[^)]+)\\)/g, '<a href=\"$2\">$1</a>');\nconst mdToHtml = md => { const out = []; let list = null;\n  const close = () => { if (list) { out.push(`</${list}>`); list = null; } };\n  for (const line of String(md).split('\\n')) {\n    let m;\n    if ((m = line.match(/^(#{1,3})\\s+(.*)/))) { close(); out.push(`<h${m[1].length + 1}>${inline(m[2])}</h${m[1].length + 1}>`); }\n    else if ((m = line.match(/^\\d+\\.\\s+(.*)/))) { if (list !== 'ol') { close(); out.push('<ol>'); list = 'ol'; } out.push(`<li>${inline(m[1])}`); }\n    else if ((m = line.match(/^\\s+(\\*Metric:\\*.*)/))) { out.push(`<br>${inline(m[1])}</li>`); }\n    else if ((m = line.match(/^-\\s+(.*)/))) { if (list !== 'ul') { close(); out.push('<ul>'); list = 'ul'; } out.push(`<li>${inline(m[1])}</li>`); }\n    else if (!line.trim()) { close(); }\n    else { close(); out.push(`<p>${inline(line)}</p>`); }\n  }\n  close(); return out.join('\\n'); };\nconst subject = `Weekly Product Pulse + Customer Clarification — ${fmt(run.week_end)}`;\nconst html = `<div style=\"font-family:Arial,sans-serif;font-size:14px;line-height:1.5;color:#222\">\n<p>Hi team,</p><p>Here is this week's product pulse from Google Play reviews, followed by a reusable support snippet for the most common fee confusion.</p>\n${mdToHtml(run.weekly_pulse)}\n<hr><h2>Support snippet: \"I paid ₹399 but the app still shows Free\"</h2>\n<p><i>Reusable as-is in replies to users. Facts only; sources below.</i></p>\n${mdToHtml(exp.markdown)}\n<hr><p style=\"color:#777;font-size:12px\">Drafted by the Review Pulse agent after human approval. Not sent automatically.</p></div>`;\n\nreturn [{ json: { skip: false, action, run_id: runId, doc_id: cfg.pulse_doc_id, doc_text: docText,\n  to: cfg.draft_to_email || cfg.approver_email, subject, html } }];\n"
+      },
+      "id": "553a7558-98d3-47bf-aa28-f1df6698ba0d",
+      "name": "Build content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "11dbb9f1-e158-4669-a552-53c6f3e55d63",
+              "leftValue": "={{ $json.skip }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "11c7b296-58d1-4040-9aca-1a1e9ed76cf9",
+      "name": "Already done?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "f469e8b8-be62-4de2-804d-c82745b37c52",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "append_to_doc",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "22874a80-495e-4d49-a577-63d8c89750a2",
+      "name": "Doc or draft?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1320,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentURL": "={{ $json.doc_id }}",
+        "actionsUi": {
+          "actionFields": [
+            {
+              "action": "insert",
+              "locationChoice": "endOfSegmentLocation",
+              "text": "={{ $json.doc_text }}"
+            }
+          ]
+        }
+      },
+      "id": "0b111f22-5ef5-493d-ac4d-34185c2f3e54",
+      "name": "Append to Google Doc",
+      "type": "n8n-nodes-base.googleDocs",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        300
+      ],
+      "credentials": {
+        "googleDocsOAuth2Api": {
+          "id": "",
+          "name": "Google Docs account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "draft",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {
+          "sendTo": "={{ $json.to }}"
+        }
+      },
+      "id": "b28e7d4f-e5a6-47f7-ac53-0c0df0178c94",
+      "name": "Create Gmail draft",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1540,
+        500
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---- Record what the tool did on the run row, and return a short result to the MCP caller ----\nconst b = $('Build content').first().json;\nconst r = $input.first().json;\nconst ts = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 19);\nif (b.action === 'append_to_doc') {\n  const docUrl = `https://docs.google.com/document/d/${b.doc_id}/edit`;\n  return [{ json: { run_id: b.run_id, doc_url: docUrl, updated_at: ts } }];\n}\nconst id = r.id || r.draftId || r.message?.id || '';\nif (!id) throw new Error('Gmail did not return a draft id');\nreturn [{ json: { run_id: b.run_id, gmail_draft_id: id, updated_at: ts } }];\n"
+      },
+      "id": "191b9984-209c-4e3d-a8de-6f101cc6b489",
+      "name": "Record result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "1EOhIUlNS4RBGThElb2kOHIdniqzQJScYD_EYkvqvcD0",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "runs",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [
+            "run_id"
+          ],
+          "schema": [
+            {
+              "id": "run_id",
+              "displayName": "run_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "week_start",
+              "displayName": "week_start",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "week_end",
+              "displayName": "week_end",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "window_from",
+              "displayName": "window_from",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "window_to",
+              "displayName": "window_to",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "base_n",
+              "displayName": "base_n",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "theme_stats_json",
+              "displayName": "theme_stats_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "top_themes",
+              "displayName": "top_themes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "quotes_json",
+              "displayName": "quotes_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fee_code",
+              "displayName": "fee_code",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fee_count",
+              "displayName": "fee_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fee_trend",
+              "displayName": "fee_trend",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "weekly_pulse",
+              "displayName": "weekly_pulse",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "explainer_json",
+              "displayName": "explainer_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "validation_report",
+              "displayName": "validation_report",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "approval_sent_at",
+              "displayName": "approval_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "approved_at",
+              "displayName": "approved_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "approver_comment",
+              "displayName": "approver_comment",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "doc_url",
+              "displayName": "doc_url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "gmail_draft_id",
+              "displayName": "gmail_draft_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "error",
+              "displayName": "error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "updated_at",
+              "displayName": "updated_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "0ff2f20b-321e-4141-8ca3-ecfc382cd2ec",
+      "name": "Save link to runs",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1980,
+        400
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---- Text returned to the AI agent over MCP ----\nconst b = $('Build content').first().json;\nlet result = b.skip ? b.result : '';\ntry { const s = $('Save link to runs').first().json; result = s.doc_url || s.gmail_draft_id || result; } catch (e) {}\nconst msg = b.action === 'append_to_doc'\n  ? (b.skip ? `Already appended for ${b.run_id}: ${result}` : `Appended ${b.run_id} to the Doc: ${result}`)\n  : (b.skip ? `Draft already exists for ${b.run_id}: ${result}` : `Created Gmail draft (not sent) for ${b.run_id}: ${result}`);\nreturn [{ json: { response: msg } }];\n"
+      },
+      "id": "4987ef9d-370a-4737-a1c3-3b7489b3051d",
+      "name": "Reply to agent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Review Pulse – 5a Tool actions\nCalled by the MCP tools with `{action, run_id}`.\nBuilds the Doc entry / email **from the approved row in the Sheet** (the AI never re-types content), refuses runs that aren't approved, never writes twice for the same week, and records the Doc link / draft ID on the run row.",
+        "height": 260,
+        "width": 520
+      },
+      "id": "e6de8e1f-5577-4c49-ae72-6dea60ec36b6",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -120
+      ]
+    }
+  ],
+  "connections": {
+    "When called by MCP tool": {
+      "main": [
+        [
+          {
+            "node": "Read config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read config": {
+      "main": [
+        [
+          {
+            "node": "Read fee_types",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read fee_types": {
+      "main": [
+        [
+          {
+            "node": "Read runs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read runs": {
+      "main": [
+        [
+          {
+            "node": "Build content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build content": {
+      "main": [
+        [
+          {
+            "node": "Already done?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Already done?": {
+      "main": [
+        [
+          {
+            "node": "Reply to agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Doc or draft?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Doc or draft?": {
+      "main": [
+        [
+          {
+            "node": "Append to Google Doc",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Gmail draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append to Google Doc": {
+      "main": [
+        [
+          {
+            "node": "Record result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Gmail draft": {
+      "main": [
+        [
+          {
+            "node": "Record result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record result": {
+      "main": [
+        [
+          {
+            "node": "Save link to runs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save link to runs": {
+      "main": [
+        [
+          {
+            "node": "Reply to agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

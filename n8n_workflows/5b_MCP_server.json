@@ -1,0 +1,158 @@
+{
+  "name": "Review Pulse – 5b MCP server",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "review-pulse-tools"
+      },
+      "id": "4f3dd5c5-b83d-405f-a99d-7a2cd1f8ecc0",
+      "name": "MCP Server Trigger",
+      "type": "@n8n/n8n-nodes-langchain.mcpTrigger",
+      "typeVersion": 2,
+      "position": [
+        300,
+        200
+      ],
+      "webhookId": "c62487b3-64dc-4825-aa00-417ee4339718"
+    },
+    {
+      "parameters": {
+        "description": "Append the APPROVED weekly entry for a run to the Weekly Product Pulse Log Google Doc. Input: run_id only. Content is taken from the approved record; do not pass text.",
+        "workflowId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "action": "append_to_doc",
+            "run_id": "={{ $fromAI('run_id', 'The approved week run id, e.g. 2026-W41', 'string') }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "action",
+              "displayName": "action",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "run_id",
+              "displayName": "run_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      },
+      "id": "1bebaa6e-4bd2-4727-88a3-f83c5e536f39",
+      "name": "append_to_doc",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [
+        200,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "description": "Create (do NOT send) a Gmail draft 'Weekly Product Pulse + Customer Clarification' for an APPROVED run. Input: run_id only.",
+        "workflowId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "action": "create_email_draft",
+            "run_id": "={{ $fromAI('run_id', 'The approved week run id, e.g. 2026-W41', 'string') }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "action",
+              "displayName": "action",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "run_id",
+              "displayName": "run_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      },
+      "id": "98ec0da7-736f-4702-87fb-e59373f64bb8",
+      "name": "create_email_draft",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [
+        460,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Review Pulse – 5b MCP server\nExposes 2 tools over MCP: **append_to_doc** and **create_email_draft**. Both call workflow *5a Tool actions*.\n\n1. In each tool node pick workflow **Review Pulse – 5a Tool actions**.\n2. **Activate / Publish** this workflow.\n3. Copy the **Production URL** from the MCP Server Trigger → paste into the MCP Client node in 5c.",
+        "height": 300,
+        "width": 560
+      },
+      "id": "8a520107-2003-4bac-aae0-1900da1d01c6",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -160
+      ]
+    }
+  ],
+  "connections": {
+    "append_to_doc": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Server Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "create_email_draft": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Server Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

@@ -1,0 +1,1382 @@
+{
+  "name": "Review Pulse – 0 Orchestrator",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8-12 * * 1"
+            }
+          ]
+        }
+      },
+      "id": "f19d1494-116d-4399-bd31-b7217e270839",
+      "name": "Every Monday 08:00–12:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "3103852f-e7f3-445f-adb0-b156b0eeac3b",
+      "name": "Run manually",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "2fca998e-5369-4254-b1a0-8f92528e1db3",
+              "name": "run_id",
+              "value": "",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ffd97c62-c496-493f-9320-2f814e764fd9",
+      "name": "Week override",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "1EOhIUlNS4RBGThElb2kOHIdniqzQJScYD_EYkvqvcD0",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "ingest_log",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "4cc58827-93dc-446a-baa7-d9e3e5dbbbc7",
+      "name": "Read ingest_log",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        440,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "1EOhIUlNS4RBGThElb2kOHIdniqzQJScYD_EYkvqvcD0",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "runs",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "84621452-c243-428f-839a-d91ea55a1127",
+      "name": "Read runs",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        660,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---- Decide what this hourly check should do for last week's run ----\n// Runs Mon 08:00–12:00 IST (hourly) and on manual runs. Safe to run any number of times.\nconst IST = 5.5 * 3600e3;\nconst nowIst = new Date(Date.now() + IST);                       // \"IST clock\" stored in a UTC Date\nconst ts = nowIst.toISOString().slice(0, 19);\nconst hour = nowIst.getUTCHours();\nlet manual = false;\ntry { manual = $('Run manually').isExecuted; } catch (e) {}\nconst FINAL_HOUR = 12;                                           // last scheduled check (12:00 IST)\nconst STALE_MIN = 90;                                            // a 'processing' run older than this is resumed\n\n// last full ISO week (Mon–Sun) in IST\nconst isoWeek = d => {\n  const t = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));\n  const day = t.getUTCDay() || 7; t.setUTCDate(t.getUTCDate() + 4 - day);\n  const y = t.getUTCFullYear(), w = Math.ceil(((t - Date.UTC(y, 0, 1)) / 864e5 + 1) / 7);\n  return `${y}-W${String(w).padStart(2, '0')}`;\n};\nlet runId = '';\ntry { runId = String($('Week override').first().json.run_id || '').trim(); } catch (e) {}\nif (!/^\\d{4}-W\\d{2}$/.test(runId)) runId = isoWeek(new Date(nowIst.getTime() - 7 * 864e5));\n\n// \"2026-10-14 0:17:42\" or \"2026-10-14T00:17:42\" (IST) -> minutes ago\nconst minutesAgo = s => {\n  const m = String(s || '').match(/(\\d{4})-(\\d{2})-(\\d{2})[ T](\\d{1,2}):(\\d{2})/);\n  if (!m) return Infinity;\n  return (nowIst - Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5])) / 6e4;\n};\n\nconst ingest = $('Read ingest_log').all(0, 0).map(i => i.json).find(r => r.run_id === runId);\nconst run = $('Read runs').all(0, 0).map(i => i.json).find(r => r.run_id === runId);\nconst out = (action, reason, extra = {}) => [{ json: { action, reason, run_id: runId, checked_at: ts, ...extra } }];\n\n// 1. Already handled this week? (approval sent, published, rejected…)\nconst DONE = ['awaiting_approval', 'approved', 'published', 'publish_failed', 'rejected', 'expired'];\nif (run && DONE.includes(String(run.status)))\n  return out('skip', `${runId} is already \"${run.status}\" – nothing to do.`);\nif (run && run.status === 'processing' && minutesAgo(run.updated_at) < STALE_MIN)\n  return out('skip', `${runId} is being processed by another execution (started ${run.updated_at}).`);\n\n// 2. Has GitHub finished collecting the reviews?\nconst st = String(ingest?.status || 'not started');\nif (st === 'done')\n  return out('run', `Ingest done${ingest.reviews_new ? ` (${ingest.reviews_new} new reviews)` : \"\"}. Starting analysis.`,\n             { status: 'processing', updated_at: ts, error: '' });\nif (run && run.status === 'blocked')\n  return out('skip', `${runId} was already blocked and you were alerted: ${run.error}. Re-run the GitHub ingest, then run this again.`);\nif (st === 'failed' || st === 'low_volume' || manual || hour >= FINAL_HOUR) {\n  const why = st === 'failed' ? `GitHub ingest failed: ${ingest.error || 'see the Actions log'}`\n    : st === 'low_volume' ? `Too few reviews collected (${ingest.error || 'low volume'})`\n    : `Reviews for ${runId} were not collected by ${manual ? 'now' : FINAL_HOUR + ':00 IST'} (ingest status: ${st}).`;\n  return out('block', why, { status: 'blocked', updated_at: ts, error: why });\n}\nreturn out('skip', `Ingest is \"${st}\" – will check again next hour.`);\n"
+      },
+      "id": "9fc13105-b43a-47ea-8b0e-b2ee0fc76101",
+      "name": "Decide",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "8d9ca8d2-3430-4723-87e9-aceb087235bd",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "run",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "run"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "36e869cc-8f61-4246-bb7c-3b8c0c83cdc6",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "block",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "block"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "c77fe15c-8bf1-4f3f-9da8-be19faff4675",
+                    "leftValue": "={{ $json.action }}",
+                    "rightValue": "skip",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "skip"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f4b22370-4e1c-4dce-808d-e38598b49d21",
+      "name": "What to do?",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "1EOhIUlNS4RBGThElb2kOHIdniqzQJScYD_EYkvqvcD0",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "runs",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "run_id": "={{ $('Decide').first().json.run_id }}",
+            "status": "={{ $('Decide').first().json.status }}",
+            "updated_at": "={{ $('Decide').first().json.updated_at }}",
+            "error": "={{ $('Decide').first().json.error }}"
+          },
+          "matchingColumns": [
+            "run_id"
+          ],
+          "schema": [
+            {
+              "id": "run_id",
+              "displayName": "run_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "week_start",
+              "displayName": "week_start",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "week_end",
+              "displayName": "week_end",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "window_from",
+              "displayName": "window_from",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "window_to",
+              "displayName": "window_to",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "base_n",
+              "displayName": "base_n",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "theme_stats_json",
+              "displayName": "theme_stats_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "top_themes",
+              "displayName": "top_themes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "quotes_json",
+              "displayName": "quotes_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fee_code",
+              "displayName": "fee_code",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fee_count",
+              "displayName": "fee_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fee_trend",
+              "displayName": "fee_trend",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "weekly_pulse",
+              "displayName": "weekly_pulse",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "explainer_json",
+              "displayName": "explainer_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "validation_report",
+              "displayName": "validation_report",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "approval_sent_at",
+              "displayName": "approval_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "approved_at",
+              "displayName": "approved_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "approver_comment",
+              "displayName": "approver_comment",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "doc_url",
+              "displayName": "doc_url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "gmail_draft_id",
+              "displayName": "gmail_draft_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "error",
+              "displayName": "error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "updated_at",
+              "displayName": "updated_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "266caa4f-686e-47da-8376-d8d3c5b804c6",
+      "name": "Save: processing",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1340,
+        260
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "c84aa8a6-cfb6-4b4a-a7e8-93d9d2b93a87",
+      "name": "Run 3b Analyse",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1560,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "1EOhIUlNS4RBGThElb2kOHIdniqzQJScYD_EYkvqvcD0",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "runs",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "45efde0d-f678-41ef-a9bd-372b511b2311",
+      "name": "Read runs (after 3b)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1780,
+        260
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---- Did Analyse finish? Retry once if tagging is still in progress ----\nconst runId = $('Decide').first().json.run_id;\nconst run = $input.all().map(i => i.json).find(r => r.run_id === runId) || {};\nconst MAX_ATTEMPTS = 3;\nconst attempt = $runIndex + 1;\nconst st = String(run.status || 'missing');\nif (st === 'analysed') return [{ json: { next: 'draft', run_id: runId, attempt } }];\nif (st === 'tagging_in_progress' && attempt < MAX_ATTEMPTS)\n  return [{ json: { next: 'retry', run_id: runId, attempt } }];\nconst why = st === 'analysed_no_fee_issue'\n  ? `${runId}: no fee/charge issue found in the 10-week window, so there is nothing to explain. Check the fee_types tab.`\n  : `${runId}: analysis did not finish (status \"${st}\" after ${attempt} attempt(s)). ${run.error || ''}`;\nreturn [{ json: { next: 'fail', run_id: runId, error: why } }];\n"
+      },
+      "id": "9993e8b1-4e67-42c7-bf7c-d91699eebd9e",
+      "name": "Check analysis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "5411ca27-5788-47ff-b516-e307fe56e745",
+                    "leftValue": "={{ $json.next }}",
+                    "rightValue": "draft",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "draft"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "7e3aa2c7-f585-46b2-a074-91a63995e552",
+                    "leftValue": "={{ $json.next }}",
+                    "rightValue": "retry",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "retry"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "94465277-2022-4c30-830f-0b052f56c731",
+                    "leftValue": "={{ $json.next }}",
+                    "rightValue": "fail",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "fail"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "9041ee77-73ec-454d-be82-8461835814ba",
+      "name": "Analysis result",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        2220,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "c58ca6b0-6a3d-4210-a849-f7de2092a282",
+      "name": "Run 4 Draft & validate",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        2460,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "1EOhIUlNS4RBGThElb2kOHIdniqzQJScYD_EYkvqvcD0",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "runs",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "244de181-f194-4cdd-9a06-95d9c424fabe",
+      "name": "Read runs (after 4)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2680,
+        160
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---- Is the draft ready for approval? ----\nconst runId = $('Decide').first().json.run_id;\nconst run = $input.all().map(i => i.json).find(r => r.run_id === runId) || {};\nif (run.status === 'draft_ready') return [{ json: { ok: true, run_id: runId } }];\nlet failures = '';\ntry { failures = (JSON.parse(run.validation_report || '{}').failures || []).join('; '); } catch (e) {}\nreturn [{ json: { ok: false, run_id: runId,\n  error: `${runId}: draft not ready (status \"${run.status || 'missing'}\"). ${failures || run.error || ''}`.trim() } }];\n"
+      },
+      "id": "473c2747-5ff6-4d42-91b8-2b62bed18bfe",
+      "name": "Check draft",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2900,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "5f910562-1c3f-45b0-bea1-78fe103338b1",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "17adfc16-d97a-4b03-a9a1-763043d47914",
+      "name": "Draft ready?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3120,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "377ba4d8-166a-4c28-9b87-e21b71b82f9c",
+      "name": "Run 5c Approve & publish",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        3360,
+        60
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "ef619214-fac2-4076-b9d6-acbd9fef063c",
+      "name": "Approval email sent",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        3580,
+        60
+      ]
+    },
+    {
+      "parameters": {
+        "errorMessage": "={{ $json.error }}"
+      },
+      "id": "b926961a-9c97-4824-bb54-2e2f8ee67dd4",
+      "name": "Stop: draft failed",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        3360,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "errorMessage": "={{ $json.error }}"
+      },
+      "id": "337f36fb-d889-4994-9bcc-234558799137",
+      "name": "Stop: analysis failed",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        2460,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "1EOhIUlNS4RBGThElb2kOHIdniqzQJScYD_EYkvqvcD0",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "runs",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "run_id": "={{ $('Decide').first().json.run_id }}",
+            "status": "={{ $('Decide').first().json.status }}",
+            "updated_at": "={{ $('Decide').first().json.updated_at }}",
+            "error": "={{ $('Decide').first().json.error }}"
+          },
+          "matchingColumns": [
+            "run_id"
+          ],
+          "schema": [
+            {
+              "id": "run_id",
+              "displayName": "run_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "week_start",
+              "displayName": "week_start",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "week_end",
+              "displayName": "week_end",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "window_from",
+              "displayName": "window_from",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "window_to",
+              "displayName": "window_to",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "base_n",
+              "displayName": "base_n",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "theme_stats_json",
+              "displayName": "theme_stats_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "top_themes",
+              "displayName": "top_themes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "quotes_json",
+              "displayName": "quotes_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fee_code",
+              "displayName": "fee_code",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fee_count",
+              "displayName": "fee_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fee_trend",
+              "displayName": "fee_trend",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "weekly_pulse",
+              "displayName": "weekly_pulse",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "explainer_json",
+              "displayName": "explainer_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "validation_report",
+              "displayName": "validation_report",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "approval_sent_at",
+              "displayName": "approval_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "approved_at",
+              "displayName": "approved_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "approver_comment",
+              "displayName": "approver_comment",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "doc_url",
+              "displayName": "doc_url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "gmail_draft_id",
+              "displayName": "gmail_draft_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "error",
+              "displayName": "error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "updated_at",
+              "displayName": "updated_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "076002a8-6e3b-4f3d-9a55-b668c7d2584b",
+      "name": "Save: blocked",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1340,
+        460
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "errorMessage": "={{ $('Decide').first().json.reason }}"
+      },
+      "id": "51e269e5-e3eb-4d3b-8581-8828124359cb",
+      "name": "Stop: ingest not ready",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        1560,
+        460
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "d4c2e2c7-6fdb-409c-a564-fa0132dea78f",
+      "name": "Nothing to do",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1340,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Review Pulse – 0 Orchestrator\n**Every Monday, hourly 08:00–12:00 IST.** GitHub collects reviews at 07:00.\n\n1. Waits until `ingest_log` says **done** for last week.\n2. Runs **3b Analyse** (retries if tagging is unfinished) → **4 Draft & validate** → **5c Approve & publish** (sends you the approval email).\n3. Safe to run any number of times: a week that is already processing, awaiting approval or published is skipped.\n4. Anything wrong → the run stops and **Review Pulse – Error alert** emails you.\n\n**Manual run:** leave *Week override* blank for last week, or type e.g. `2026-W42`.",
+        "height": 300,
+        "width": 640
+      },
+      "id": "701e60aa-1e38-4497-b4c4-bb6f5f82deb0",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -40
+      ]
+    }
+  ],
+  "connections": {
+    "Every Monday 08:00–12:00": {
+      "main": [
+        [
+          {
+            "node": "Read ingest_log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run manually": {
+      "main": [
+        [
+          {
+            "node": "Week override",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Week override": {
+      "main": [
+        [
+          {
+            "node": "Read ingest_log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read ingest_log": {
+      "main": [
+        [
+          {
+            "node": "Read runs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read runs": {
+      "main": [
+        [
+          {
+            "node": "Decide",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decide": {
+      "main": [
+        [
+          {
+            "node": "What to do?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "What to do?": {
+      "main": [
+        [
+          {
+            "node": "Save: processing",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Save: blocked",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Nothing to do",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save: processing": {
+      "main": [
+        [
+          {
+            "node": "Run 3b Analyse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run 3b Analyse": {
+      "main": [
+        [
+          {
+            "node": "Read runs (after 3b)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read runs (after 3b)": {
+      "main": [
+        [
+          {
+            "node": "Check analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check analysis": {
+      "main": [
+        [
+          {
+            "node": "Analysis result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analysis result": {
+      "main": [
+        [
+          {
+            "node": "Run 4 Draft & validate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Run 3b Analyse",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Stop: analysis failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run 4 Draft & validate": {
+      "main": [
+        [
+          {
+            "node": "Read runs (after 4)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read runs (after 4)": {
+      "main": [
+        [
+          {
+            "node": "Check draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check draft": {
+      "main": [
+        [
+          {
+            "node": "Draft ready?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Draft ready?": {
+      "main": [
+        [
+          {
+            "node": "Run 5c Approve & publish",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Stop: draft failed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run 5c Approve & publish": {
+      "main": [
+        [
+          {
+            "node": "Approval email sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save: blocked": {
+      "main": [
+        [
+          {
+            "node": "Stop: ingest not ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata"
+  },
+  "pinData": {}
+}

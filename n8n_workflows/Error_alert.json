@@ -1,0 +1,141 @@
+{
+  "name": "Review Pulse – Error alert",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "1da0b624-3c50-4737-aa4e-12a479776fef",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "1EOhIUlNS4RBGThElb2kOHIdniqzQJScYD_EYkvqvcD0",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "config",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "99d18726-c717-40ed-b3b3-9a77c672d599",
+      "name": "Read config",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        220,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---- Build a plain-text alert for any failed Review Pulse execution ----\nconst e = $('Error Trigger').first().json;\nconst cfg = Object.fromEntries($('Read config').all(0, 0).map(i => [i.json.key, String(i.json.value ?? '')]));\nconst ex = e.execution || {}, wf = e.workflow || {};\nconst msg = ex.error?.message || e.trigger?.error?.message || 'Unknown error';\nconst node = ex.lastNodeExecuted || ex.error?.node?.name || '–';\nconst ist = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 16).replace('T', ' ');\nconst runMatch = String(msg).match(/\\d{4}-W\\d{2}/);\nreturn [{ json: {\n  to: cfg.approver_email,\n  subject: `⚠ Review Pulse failed: ${wf.name || 'workflow'}${runMatch ? ' – ' + runMatch[0] : ''}`,\n  message: [\n    `A Review Pulse workflow stopped at ${ist} IST.`, '',\n    `Workflow: ${wf.name || '–'}`,\n    `Step: ${node}`,\n    `Reason: ${msg}`, '',\n    ex.url ? `Open the execution: ${ex.url}` : '',\n    'Status of every week is in the runs tab of Review_Pulse_DB.',\n    'Nothing was sent to anyone; no Doc entry or draft is created without your approval.',\n  ].filter(l => l !== null).join('\\n'),\n}}];\n"
+      },
+      "id": "6dbd6136-a931-4ba7-8f5a-85448a606d67",
+      "name": "Build alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "text",
+        "message": "={{ $json.message }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "a1796eee-f1e9-4786-9c01-300f4e859ca6",
+      "name": "Email me the alert",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        660,
+        300
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "",
+          "name": "Gmail account"
+        }
+      },
+      "webhookId": "5585ba50-087e-45e9-957f-4512d249980d"
+    },
+    {
+      "parameters": {
+        "content": "## Review Pulse – Error alert\nSet this as the **Error workflow** (Settings) of: 0 Orchestrator, 3b, 4, 5a and 5c.\nWhenever one of them fails, you get one plain email with the workflow, the step and the reason.",
+        "height": 220,
+        "width": 560
+      },
+      "id": "3c35ab0f-9b00-4728-908e-fe7a87ee2621",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        20
+      ]
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read config": {
+      "main": [
+        [
+          {
+            "node": "Build alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build alert": {
+      "main": [
+        [
+          {
+            "node": "Email me the alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Kolkata"
+  },
+  "pinData": {}
+}

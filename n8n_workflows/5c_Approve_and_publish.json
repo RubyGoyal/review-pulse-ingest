@@ -1,0 +1,1304 @@
+{
+  "name": "Review Pulse – 5c Approve & publish",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "97bca4d4-ceee-4f3d-8bb4-39c988836cb7",
+      "name": "Run manually",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "08f34078-b416-4432-af8f-d7480ce36754",
+      "name": "When called by orchestrator",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "1EOhIUlNS4RBGThElb2kOHIdniqzQJScYD_EYkvqvcD0",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "config",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "5e0c4b73-1f86-4f2c-994a-741980fef05a",
+      "name": "Read config",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        220,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "1EOhIUlNS4RBGThElb2kOHIdniqzQJScYD_EYkvqvcD0",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "runs",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "8798b9ca-c2e1-4652-b414-9c44c8e143c4",
+      "name": "Read runs",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        440,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---- Pick the draft to approve and build the approval email (plain text) ----\nconst runs = $('Read runs').all(0, 0).map(i => i.json);\nconst cfg = Object.fromEntries($('Read config').all(0, 0).map(i => [i.json.key, String(i.json.value ?? '')]));\nlet runId = '';\ntry { runId = String($('When called by orchestrator').first().json.run_id || ''); } catch (e) {}\nconst run = runId ? runs.find(r => r.run_id === runId)\n  : runs.filter(r => r.status === 'draft_ready').sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)))[0];\nif (!run) throw new Error(runId ? `Run ${runId} not found` : 'No run with status draft_ready. Run the Draft workflow first.');\nif (run.status !== 'draft_ready') throw new Error(`Run ${run.run_id} is \"${run.status}\" – only draft_ready runs can be sent for approval.`);\n\nconst rep = JSON.parse(run.validation_report || '{}');\nconst exp = JSON.parse(run.explainer_json || '{}');\nconst host = u => (String(u).match(/^https?:\\/\\/([^\\/?#]+)/) || [])[1] || u;\nconst srcLines = (rep.sources || []).map(s => `  - ${host(s.url)}: ${s.status === 'verified' ? 'verified' : s.status.toUpperCase()} (${s.facts})`);\nconst flags = [];\nif ((rep.explainer_needs_review || []).length) flags.push('⚠ An official page changed – review the explainer before approving.');\nif ((rep.explainer_unverified || []).length) flags.push('ℹ Some sources could not be fetched this week (marked UNREACHABLE).');\nconst plain = md => String(md).replace(/\\*\\*/g, '').replace(/^#+\\s*/gm, '').replace(/^\\s*\\*(Metric:)\\*/gm, '   $1');\n\nconst message = [\n  `Review Pulse – approval needed for ${run.run_id}`, '',\n  `Validation: ${rep.passed ? 'PASSED' : 'NOT PASSED'} (attempt ${rep.attempt}, ${rep.pulse_words} words; quotes verbatim: ${rep.checks?.quotes_verbatim}; numbers from stats: ${rep.checks?.numbers_from_stats})`,\n  'Official sources:', ...srcLines, ...flags, '',\n  '================ WEEKLY PULSE ================', plain(run.weekly_pulse), '',\n  '================ FEE EXPLAINER (support snippet) ================', ...exp.bullets.map(b => `• ${b}`), '',\n  'Sources:', ...exp.source_links.map(u => `  ${u}`), `Last checked: ${exp.last_checked}`, '',\n  '================ IF YOU APPROVE ================',\n  '1. This entry is appended to \"Weekly Product Pulse Log\" (Google Doc).',\n  `2. A Gmail DRAFT is created to ${cfg.draft_to_email || cfg.approver_email} – it is NOT sent.`,\n  'If you reject, nothing is written anywhere.',\n].join('\\n');\n\nreturn [{ json: {\n  run_id: run.run_id, to: cfg.approver_email,\n  subject: `[Approve?] Weekly Product Pulse ${run.run_id} – ${run.fee_code}`,\n  message, timeout_hours: Number(cfg.approval_timeout_hours || 48),\n}}];\n"
+      },
+      "id": "2d1fbd00-3775-493a-b9f0-ef1373eaa8af",
+      "name": "Prepare approval",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---- Row update for the runs tab (only real columns) ----\nconst p = $('Prepare approval').first().json;\nconst ts = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 19);\nconst STATUS = 'awaiting_approval';\nif (STATUS === 'awaiting_approval') return [{ json: { run_id: p.run_id, status: STATUS, approval_sent_at: ts, updated_at: ts } }];\n// decision node\nconst r = $input.first().json;\nconst approved = r?.data?.approved ?? r?.approved;\nif (approved === true) return [{ json: { run_id: p.run_id, status: 'approved', approved_at: ts, approver_comment: 'approved via email', updated_at: ts } }];\nconst expired = approved === undefined;\nreturn [{ json: { run_id: p.run_id, status: expired ? 'expired' : 'rejected', approver_comment: expired ? `no response within ${p.timeout_hours}h` : 'rejected via email', updated_at: ts } }];\n"
+      },
+      "id": "f765581d-82e4-4118-a714-05a70c36d198",
+      "name": "Mark awaiting approval",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "1EOhIUlNS4RBGThElb2kOHIdniqzQJScYD_EYkvqvcD0",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "runs",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [
+            "run_id"
+          ],
+          "schema": [
+            {
+              "id": "run_id",
+              "displayName": "run_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "week_start",
+              "displayName": "week_start",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "week_end",
+              "displayName": "week_end",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "window_from",
+              "displayName": "window_from",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "window_to",
+              "displayName": "window_to",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "base_n",
+              "displayName": "base_n",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "theme_stats_json",
+              "displayName": "theme_stats_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "top_themes",
+              "displayName": "top_themes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "quotes_json",
+              "displayName": "quotes_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fee_code",
+              "displayName": "fee_code",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fee_count",
+              "displayName": "fee_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fee_trend",
+              "displayName": "fee_trend",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "weekly_pulse",
+              "displayName": "weekly_pulse",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "explainer_json",
+              "displayName": "explainer_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "validation_report",
+              "displayName": "validation_report",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "approval_sent_at",
+              "displayName": "approval_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "approved_at",
+              "displayName": "approved_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "approver_comment",
+              "displayName": "approver_comment",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "doc_url",
+              "displayName": "doc_url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "gmail_draft_id",
+              "displayName": "gmail_draft_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "error",
+              "displayName": "error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "updated_at",
+              "displayName": "updated_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "500490bd-3aa5-4368-b088-85760418df65",
+      "name": "Save: awaiting approval",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1100,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "sendAndWait",
+        "sendTo": "={{ $('Prepare approval').first().json.to }}",
+        "subject": "={{ $('Prepare approval').first().json.subject }}",
+        "message": "={{ $('Prepare approval').first().json.message }}",
+        "approvalOptions": {
+          "values": {
+            "approvalType": "double",
+            "approveLabel": "Approve & log",
+            "disapproveLabel": "Reject"
+          }
+        },
+        "options": {
+          "limitWaitTime": {
+            "values": {
+              "limitType": "afterTimeInterval",
+              "resumeAmount": 48,
+              "resumeUnit": "hours"
+            }
+          }
+        }
+      },
+      "id": "888f80e7-82ef-472b-b489-f3e0d0d4aff4",
+      "name": "Email: approve?",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1320,
+        300
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "",
+          "name": "Gmail account"
+        }
+      },
+      "webhookId": "9ce3910c-6c7b-4196-957d-fbd05a4adee7"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---- Row update for the runs tab (only real columns) ----\nconst p = $('Prepare approval').first().json;\nconst ts = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 19);\nconst STATUS = 'decision';\nif (STATUS === 'awaiting_approval') return [{ json: { run_id: p.run_id, status: STATUS, approval_sent_at: ts, updated_at: ts } }];\n// decision node\nconst r = $input.first().json;\nconst approved = r?.data?.approved ?? r?.approved;\nif (approved === true) return [{ json: { run_id: p.run_id, status: 'approved', approved_at: ts, approver_comment: 'approved via email', updated_at: ts } }];\nconst expired = approved === undefined;\nreturn [{ json: { run_id: p.run_id, status: expired ? 'expired' : 'rejected', approver_comment: expired ? `no response within ${p.timeout_hours}h` : 'rejected via email', updated_at: ts } }];\n"
+      },
+      "id": "25811cd4-a32c-40b8-bf71-90b56ac8c7c2",
+      "name": "Record decision",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "1EOhIUlNS4RBGThElb2kOHIdniqzQJScYD_EYkvqvcD0",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "runs",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [
+            "run_id"
+          ],
+          "schema": [
+            {
+              "id": "run_id",
+              "displayName": "run_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "week_start",
+              "displayName": "week_start",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "week_end",
+              "displayName": "week_end",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "window_from",
+              "displayName": "window_from",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "window_to",
+              "displayName": "window_to",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "base_n",
+              "displayName": "base_n",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "theme_stats_json",
+              "displayName": "theme_stats_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "top_themes",
+              "displayName": "top_themes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "quotes_json",
+              "displayName": "quotes_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fee_code",
+              "displayName": "fee_code",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fee_count",
+              "displayName": "fee_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fee_trend",
+              "displayName": "fee_trend",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "weekly_pulse",
+              "displayName": "weekly_pulse",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "explainer_json",
+              "displayName": "explainer_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "validation_report",
+              "displayName": "validation_report",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "approval_sent_at",
+              "displayName": "approval_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "approved_at",
+              "displayName": "approved_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "approver_comment",
+              "displayName": "approver_comment",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "doc_url",
+              "displayName": "doc_url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "gmail_draft_id",
+              "displayName": "gmail_draft_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "error",
+              "displayName": "error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "updated_at",
+              "displayName": "updated_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "937b29d2-499d-4213-9404-111df8564464",
+      "name": "Save: decision",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1760,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "0e89068f-b88e-4955-8ab3-4c8dab3f635c",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "approved",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "5ab3201b-e8b0-4784-a828-71a2402175e3",
+      "name": "Approved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1980,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Run {{ $('Prepare approval').first().json.run_id }} has been APPROVED by a human reviewer.\nPublish it now:\n1. Call the tool append_to_doc with run_id = {{ $('Prepare approval').first().json.run_id }}\n2. Call the tool create_email_draft with the same run_id.\nCall each tool exactly once. Then reply with one short line per tool, quoting what the tool returned.",
+        "options": {
+          "systemMessage": "You are a careful publishing assistant. You only call the provided MCP tools with the run_id you are given. You never write or rewrite report content yourself, never send emails, and never call a tool more than once."
+        }
+      },
+      "id": "e2f164b3-1a67-41ea-b2f7-36c6b7963148",
+      "name": "AI agent (MCP client)",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.9,
+      "position": [
+        2220,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "claude-sonnet-5-5",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "87f7ed0c-c7d5-4ccb-90ef-3eb3c9464b54",
+      "name": "Claude (agent model)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        2160,
+        440
+      ],
+      "credentials": {
+        "anthropicApi": {
+          "id": "",
+          "name": "Anthropic account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sseEndpoint": "PASTE_MCP_PRODUCTION_URL_FROM_5b"
+      },
+      "id": "f5fd480f-e0e0-4574-94c6-1acf88004dbb",
+      "name": "MCP Client: Review Pulse tools",
+      "type": "@n8n/n8n-nodes-langchain.mcpClientTool",
+      "typeVersion": 1,
+      "position": [
+        2340,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "value": "1EOhIUlNS4RBGThElb2kOHIdniqzQJScYD_EYkvqvcD0",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "runs",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "1c518dd1-d30c-4d23-86be-7c62229cf018",
+      "name": "Read runs (after publish)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2540,
+        200
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      },
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// ---- After the agent ran the MCP tools: confirm both actions really happened (from the Sheet, not the agent's word) ----\nconst p = $('Prepare approval').first().json;\nconst run = $('Read runs (after publish)').all(0, 0).map(i => i.json).find(r => r.run_id === p.run_id) || {};\nconst ok = !!run.doc_url && !!run.gmail_draft_id;\nconst missing = [!run.doc_url && 'Doc entry', !run.gmail_draft_id && 'Gmail draft'].filter(Boolean);\nreturn [{ json: {\n  run_id: p.run_id, status: ok ? 'published' : 'publish_failed',\n  error: ok ? '' : `Missing after MCP calls: ${missing.join(', ')}. Agent said: ${String($('AI agent (MCP client)').first().json.output || '').slice(0, 300)}`,\n  updated_at: new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 19),\n}}];\n"
+      },
+      "id": "6bdedbad-a85a-4c42-a0fd-124122a6b6af",
+      "name": "Confirm both actions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2760,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "1EOhIUlNS4RBGThElb2kOHIdniqzQJScYD_EYkvqvcD0",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "runs",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [
+            "run_id"
+          ],
+          "schema": [
+            {
+              "id": "run_id",
+              "displayName": "run_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "week_start",
+              "displayName": "week_start",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "week_end",
+              "displayName": "week_end",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "window_from",
+              "displayName": "window_from",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "window_to",
+              "displayName": "window_to",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "base_n",
+              "displayName": "base_n",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "theme_stats_json",
+              "displayName": "theme_stats_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "top_themes",
+              "displayName": "top_themes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "quotes_json",
+              "displayName": "quotes_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fee_code",
+              "displayName": "fee_code",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fee_count",
+              "displayName": "fee_count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "fee_trend",
+              "displayName": "fee_trend",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "weekly_pulse",
+              "displayName": "weekly_pulse",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "explainer_json",
+              "displayName": "explainer_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "validation_report",
+              "displayName": "validation_report",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "approval_sent_at",
+              "displayName": "approval_sent_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "approved_at",
+              "displayName": "approved_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "approver_comment",
+              "displayName": "approver_comment",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "doc_url",
+              "displayName": "doc_url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "gmail_draft_id",
+              "displayName": "gmail_draft_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "error",
+              "displayName": "error",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "updated_at",
+              "displayName": "updated_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d7c8cf81-2552-49c1-b8aa-341253723bf2",
+      "name": "Save: published",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2980,
+        200
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Review Pulse – 5c Approve & publish\n**Approval gate:** emails the draft with Approve / Reject buttons and **waits** (max 48h). Nothing is written before you click Approve.\n**On approve:** a Claude agent calls the 2 MCP tools (Doc append + Gmail **draft**, never sent) with the run_id only. The result is then **confirmed from the Sheet**, not from the agent's word → `published` or `publish_failed`.\n**On reject / timeout:** status `rejected` / `expired`; nothing written.",
+        "height": 320,
+        "width": 620
+      },
+      "id": "e34167a4-21ba-4d42-9d2f-a5b4afd84c32",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -200
+      ]
+    }
+  ],
+  "connections": {
+    "Run manually": {
+      "main": [
+        [
+          {
+            "node": "Read config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When called by orchestrator": {
+      "main": [
+        [
+          {
+            "node": "Read config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read config": {
+      "main": [
+        [
+          {
+            "node": "Read runs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read runs": {
+      "main": [
+        [
+          {
+            "node": "Prepare approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare approval": {
+      "main": [
+        [
+          {
+            "node": "Mark awaiting approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark awaiting approval": {
+      "main": [
+        [
+          {
+            "node": "Save: awaiting approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save: awaiting approval": {
+      "main": [
+        [
+          {
+            "node": "Email: approve?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email: approve?": {
+      "main": [
+        [
+          {
+            "node": "Record decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record decision": {
+      "main": [
+        [
+          {
+            "node": "Save: decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save: decision": {
+      "main": [
+        [
+          {
+            "node": "Approved?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Approved?": {
+      "main": [
+        [
+          {
+            "node": "AI agent (MCP client)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI agent (MCP client)": {
+      "main": [
+        [
+          {
+            "node": "Read runs (after publish)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read runs (after publish)": {
+      "main": [
+        [
+          {
+            "node": "Confirm both actions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirm both actions": {
+      "main": [
+        [
+          {
+            "node": "Save: published",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude (agent model)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI agent (MCP client)",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MCP Client: Review Pulse tools": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI agent (MCP client)",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
