@@ -1,0 +1,43 @@
+name: Weekly review ingest
+
+on:
+  schedule:
+    - cron: "30 1 * * 1"   # Every Monday 01:30 UTC = 07:00 IST
+  workflow_dispatch:        # Manual "Run workflow" button
+    inputs:
+      week_id:
+        description: "ISO week to ingest, e.g. 2026-W42 (blank = last full week)"
+        required: false
+        default: ""
+      force:
+        description: "Re-run even if this week is already done"
+        type: boolean
+        default: false
+      dry_run:
+        description: "Test only: fetch and count, write nothing to the Sheet"
+        type: boolean
+        default: true
+
+concurrency:
+  group: weekly-ingest
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Ingest reviews into Google Sheet
+        env:
+          GOOGLE_SA_JSON: ${{ secrets.GOOGLE_SA_JSON }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          WEEK_ID: ${{ github.event.inputs.week_id }}
+          FORCE: ${{ github.event.inputs.force }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: python scripts/ingest.py
