@@ -6,7 +6,7 @@ Review Pulse is an AI workflow that runs every Monday:
 3. It writes a short **weekly product pulse** and a **neutral fee explainer** with official sources.
 4. **Only after a human approves**, it uses MCP tools to append the entry to a Google Doc and create a Gmail draft. Nothing is ever sent automatically.
 
-**Live prototype:** _link added after setup_  ·  **Code:** this repo
+**Live prototype:** [rubygoyal41.n8n-wsk.com/webhook/review-pulse](https://rubygoyal41.n8n-wsk.com/webhook/review-pulse) (read-only page served by n8n; shows the latest approved pulse, the explainer and the status of every week)  ·  **Code:** this repo
 
 **Fee issue identified:** **F_ACTIVATION, "Charged ₹399 for ChatGPT Go, but the app still shows Free"**. See [Which fee issue and why](#which-fee-issue-and-why).
 
